@@ -126,16 +126,24 @@ const Result = () => {
                   </h4>
                   <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", fontSize: "0.9rem" }}>
                     <div style={{ display: "flex", justifyContent: "space-between" }}>
-                      <span style={{ color: "var(--text-muted)" }}>UG Percentage (A):</span>
-                      <span style={{ fontWeight: "600" }}>{result.ug_percentage}%</span>
+                      <span style={{ color: "var(--text-muted)" }}>Entrance Mark:</span>
+                      <span style={{ fontWeight: "600" }}>{result.score} / {result.entrance_total_marks || 100}</span>
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between" }}>
-                      <span style={{ color: "var(--text-muted)" }}>Entrance Exam Percentage (B):</span>
-                      <span style={{ fontWeight: "600" }}>{result.entrance_percentage}%</span>
+                      <span style={{ color: "var(--text-muted)" }}>Entrance 50%:</span>
+                      <span style={{ fontWeight: "600" }}>{result.entrance_weighted_score}</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ color: "var(--text-muted)" }}>UG Percentage:</span>
+                      <span style={{ fontWeight: "600" }}>{result.ug_percentage !== null && result.ug_percentage !== undefined ? `${result.ug_percentage}%` : "Incomplete"}</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ color: "var(--text-muted)" }}>UG 50%:</span>
+                      <span style={{ fontWeight: "600" }}>{result.ug_weighted_score}</span>
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", borderTop: "1px dashed #bbf7d0", paddingTop: "0.5rem", marginTop: "0.25rem" }}>
-                      <span style={{ fontWeight: "700", color: "#166534" }}>Weighted Final Score (0.5 * A + 0.5 * B):</span>
-                      <span style={{ fontWeight: "800", color: "#166534", fontSize: "1.1rem" }}>{result.final_percentage}%</span>
+                      <span style={{ fontWeight: "700", color: "#166534" }}>Final Score:</span>
+                      <span style={{ fontWeight: "800", color: "#166534", fontSize: "1.1rem" }}>{result.final_score !== null && result.final_score !== undefined ? `${result.final_score} / 100` : "Incomplete"}</span>
                     </div>
                   </div>
                 </div>

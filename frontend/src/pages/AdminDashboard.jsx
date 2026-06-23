@@ -50,10 +50,13 @@ const AdminDashboard = () => {
     option_a_image_url: "",
     option_b_image_url: "",
     option_c_image_url: "",
-    option_d_image_url: ""
+    option_d_image_url: "",
+    part_code: "A",
+    source_s_no: ""
   });
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadResult, setUploadResult] = useState(null);
+  const [questionPartFilter, setQuestionPartFilter] = useState("All");
   
   // Settings states
   const [examSettings, setExamSettings] = useState({
@@ -66,6 +69,8 @@ const AdminDashboard = () => {
   });
   const [editingCourseId, setEditingCourseId] = useState(null);
   const [editSeatCount, setEditSeatCount] = useState(30);
+  const [communitySeats, setCommunitySeats] = useState([]);
+  const [editCommunitySeats, setEditCommunitySeats] = useState({});
 
   // Counselling & Rankings states
   const [leaderboard, setLeaderboard] = useState([]);
@@ -124,8 +129,24 @@ const AdminDashboard = () => {
       localStorage.removeItem("admin_token");
       navigate("/admin/login");
     } else {
+      let errorText = "An unexpected error occurred.";
+      const detail = err.response?.data?.detail;
+      if (detail) {
+        if (typeof detail === "string") {
+          errorText = detail;
+        } else if (typeof detail === "object") {
+          if (detail.message) {
+            errorText = detail.message;
+            if (detail.errors && Array.isArray(detail.errors)) {
+              errorText += " | Details: " + detail.errors.join(" | ");
+            }
+          } else {
+            errorText = JSON.stringify(detail);
+          }
+        }
+      }
       setMessage({
-        text: err.response?.data?.detail || "An unexpected error occurred.",
+        text: errorText,
         type: "danger"
       });
     }
@@ -218,7 +239,9 @@ const AdminDashboard = () => {
       option_a_image_url: "",
       option_b_image_url: "",
       option_c_image_url: "",
-      option_d_image_url: ""
+      option_d_image_url: "",
+      part_code: "A",
+      source_s_no: ""
     });
     setQuestionModal({ show: true, editId: null });
   };
@@ -236,7 +259,9 @@ const AdminDashboard = () => {
       option_a_image_url: q.option_a_image_url || "",
       option_b_image_url: q.option_b_image_url || "",
       option_c_image_url: q.option_c_image_url || "",
-      option_d_image_url: q.option_d_image_url || ""
+      option_d_image_url: q.option_d_image_url || "",
+      part_code: q.part_code || "A",
+      source_s_no: q.source_s_no !== null && q.source_s_no !== undefined ? q.source_s_no : ""
     });
     setQuestionModal({ show: true, editId: q.id });
   };
@@ -266,12 +291,16 @@ const AdminDashboard = () => {
   const handleSaveQuestion = async (e) => {
     e.preventDefault();
     setActionLoading(true);
+    const payload = {
+      ...questionForm,
+      source_s_no: questionForm.source_s_no !== "" ? parseInt(questionForm.source_s_no, 10) : null
+    };
     try {
       if (questionModal.editId) {
-        await api.put(`/api/v1/questions/${questionModal.editId}`, questionForm);
+        await api.put(`/api/v1/questions/${questionModal.editId}`, payload);
         showMessage("Question updated successfully.");
       } else {
-        await api.post("/api/v1/questions", questionForm);
+        await api.post("/api/v1/questions", payload);
         showMessage("Question created successfully.");
       }
       setQuestionModal({ show: false, editId: null });
@@ -318,7 +347,18 @@ const AdminDashboard = () => {
         loadQuestions();
       }
     } catch (err) {
-      handleApiError(err);
+      const detail = err.response?.data?.detail;
+      if (detail && typeof detail === "object" && (detail.message || detail.errors)) {
+        setUploadResult({
+          status: "error",
+          added_count: 0,
+          part_counts: detail.counts || { A: 0, B: 0, C: 0, D: 0 },
+          errors: detail.errors || []
+        });
+        showMessage(detail.message || "Bulk upload validation failed.", "danger");
+      } else {
+        handleApiError(err);
+      }
     } finally {
       setActionLoading(false);
     }
@@ -367,6 +407,51 @@ const AdminDashboard = () => {
       setEditingCourseId(null);
       showMessage("Course seat count updated successfully.");
       loadCourses();
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const loadCommunitySeats = async () => {
+    try {
+      const res = await api.get("/api/v1/auth/courses/community-seats");
+      setCommunitySeats(res.data);
+    } catch (err) {
+      console.error("Error loading community seats:", err);
+    }
+  };
+
+  const sumOfEditSeats = () => {
+    return Object.values(editCommunitySeats).reduce((a, b) => a + b, 0);
+  };
+
+  const handleSaveCourseSeatMatrix = async (courseId) => {
+    const sum = sumOfEditSeats();
+    if (sum !== editSeatCount) {
+      showMessage(`Sum of community seats (${sum}) must equal total course seat capacity (${editSeatCount}).`, "danger");
+      return;
+    }
+
+    setActionLoading(true);
+    try {
+      await api.put(`/api/v1/auth/courses/${courseId}`, {
+        seat_count: editSeatCount,
+        is_active: true
+      });
+
+      const payload = Object.entries(editCommunitySeats).map(([code, count]) => ({
+        community_code: code,
+        seat_count: count
+      }));
+
+      await api.put(`/api/v1/auth/courses/${courseId}/community-seats`, payload);
+
+      setEditingCourseId(null);
+      showMessage("Course seat capacity and community seat matrix updated successfully.");
+      loadCourses();
+      loadCommunitySeats();
     } catch (err) {
       handleApiError(err);
     } finally {
@@ -461,6 +546,7 @@ const AdminDashboard = () => {
     else if (activeTab === "settings") {
       loadExamSettings();
       loadCourses();
+      loadCommunitySeats();
     }
     else if (activeTab === "leaderboard") loadLeaderboard();
   }, [activeTab]);
@@ -966,11 +1052,48 @@ const AdminDashboard = () => {
                     </button>
                   </form>
                   {uploadResult && (
-                    <div style={{ marginTop: "1rem", backgroundColor: "#f8fafc", padding: "1rem", borderRadius: "var(--radius-md)" }}>
-                      <p style={{ fontWeight: "600", color: uploadResult.status === "success" ? "var(--success)" : "var(--accent)" }}>
-                        Upload Complete: Added {uploadResult.added_count} questions.
+                    <div style={{ marginTop: "1rem", backgroundColor: "#f8fafc", padding: "1.25rem", borderRadius: "var(--radius-md)", border: "1px solid #e2e8f0" }}>
+                      <p style={{ fontWeight: "700", color: uploadResult.status === "success" ? "var(--success)" : "var(--danger)", fontSize: "1.05rem", marginBottom: "0.75rem" }}>
+                        {uploadResult.status === "error" ? "Upload Failed!" : `Upload Complete! Successfully added ${uploadResult.added_count} questions.`}
                       </p>
-                      {uploadResult.errors.length > 0 && (
+                      
+                      {uploadResult.part_counts && (
+                        <div style={{ backgroundColor: "#fff", border: "1px solid var(--border)", borderRadius: "8px", padding: "1rem", marginBottom: "1rem" }}>
+                          <h4 style={{ margin: "0 0 0.75rem 0", color: "var(--primary-dark)", fontSize: "0.9rem", fontWeight: "700" }}>Upload Summary:</h4>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", fontSize: "0.85rem" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between" }}>
+                              <span>Part A - Quantitative Ability:</span>
+                              <strong style={{ color: (uploadResult.part_counts.A || 0) === 25 ? "var(--success)" : "var(--danger)" }}>
+                                {uploadResult.part_counts.A || 0} / 25
+                              </strong>
+                            </div>
+                            <div style={{ display: "flex", justifyContent: "space-between" }}>
+                              <span>Part B - Analytical Reasoning:</span>
+                              <strong style={{ color: (uploadResult.part_counts.B || 0) === 25 ? "var(--success)" : "var(--danger)" }}>
+                                {uploadResult.part_counts.B || 0} / 25
+                              </strong>
+                            </div>
+                            <div style={{ display: "flex", justifyContent: "space-between" }}>
+                              <span>Part C - Logical Reasoning:</span>
+                              <strong style={{ color: (uploadResult.part_counts.C || 0) === 25 ? "var(--success)" : "var(--danger)" }}>
+                                {uploadResult.part_counts.C || 0} / 25
+                              </strong>
+                            </div>
+                            <div style={{ display: "flex", justifyContent: "space-between" }}>
+                              <span>Part D - Computer Awareness:</span>
+                              <strong style={{ color: (uploadResult.part_counts.D || 0) === 25 ? "var(--success)" : "var(--danger)" }}>
+                                {uploadResult.part_counts.D || 0} / 25
+                              </strong>
+                            </div>
+                            <div style={{ borderTop: "1px solid var(--border)", paddingTop: "0.5rem", display: "flex", justifyContent: "space-between", fontWeight: "700" }}>
+                              <span>Total:</span>
+                              <span>{uploadResult.added_count || 0} / 100</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {uploadResult.errors && uploadResult.errors.length > 0 && (
                         <div style={{ marginTop: "0.5rem", maxHeight: "150px", overflowY: "auto" }}>
                           <p style={{ fontSize: "0.85rem", fontWeight: "600", color: "var(--danger)" }}>Row Errors:</p>
                           <ul style={{ paddingLeft: "1.25rem", fontSize: "0.8rem", color: "var(--danger)" }}>
@@ -984,73 +1107,94 @@ const AdminDashboard = () => {
                   )}
                 </div>
 
+                <div className="filters-bar" style={{ display: "flex", gap: "1rem", alignItems: "center", marginBottom: "1.5rem" }}>
+                  <span style={{ fontWeight: "700", fontSize: "0.9rem" }}>Filter by Part:</span>
+                  <div style={{ display: "flex", gap: "0.5rem" }}>
+                    {["All", "A", "B", "C", "D"].map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => setQuestionPartFilter(p)}
+                        className={`btn ${questionPartFilter === p ? "btn-primary" : "btn-secondary"}`}
+                        style={{ padding: "0.35rem 1rem", fontSize: "0.85rem", width: "auto" }}
+                      >
+                        {p === "All" ? "All Sections" : `Part ${p}`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="table-container">
                   <table className="table">
                     <thead>
                       <tr>
-                        <th>ID</th>
-                        <th style={{ width: "40%" }}>Question</th>
+                        <th style={{ width: "80px" }}>Part</th>
+                        <th style={{ width: "80px" }}>S. No</th>
+                        <th style={{ width: "35%" }}>Question</th>
                         <th>Options (A, B, C, D)</th>
                         <th>Correct</th>
-                        <th style={{ textAlign: "right" }}>Marks</th>
+                        <th style={{ textAlign: "right" }}>Mark</th>
                         <th style={{ width: "100px", textAlign: "center" }}>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {questions.map((q) => (
-                        <tr key={q.id}>
-                          <td>{q.id}</td>
-                          <td style={{ fontWeight: "500", verticalAlign: "top" }}>
-                            <div>{q.question_text}</div>
-                            {q.image_url && (
-                              <div style={{ marginTop: "0.5rem" }}>
-                                <img 
-                                  src={q.image_url} 
-                                  alt="Question diagram" 
-                                  style={{ maxWidth: "150px", maxHeight: "80px", borderRadius: "4px", border: "1px solid var(--border)" }} 
-                                />
-                              </div>
-                            )}
-                          </td>
-                          <td style={{ fontSize: "0.85rem", color: "var(--text-secondary)", verticalAlign: "top" }}>
-                            <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-                              {[
-                                { label: "A", val: q.option_a, img: q.option_a_image_url },
-                                { label: "B", val: q.option_b, img: q.option_b_image_url },
-                                { label: "C", val: q.option_c, img: q.option_c_image_url },
-                                { label: "D", val: q.option_d, img: q.option_d_image_url },
-                              ].map((opt) => (
-                                <div key={opt.label} style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-                                  <span style={{ fontWeight: "600" }}>{opt.label}:</span>
-                                  {opt.val && <span>{opt.val}</span>}
-                                  {opt.img && (
-                                    <img 
-                                      src={opt.img} 
-                                      alt={`Opt ${opt.label}`} 
-                                      style={{ height: "28px", objectFit: "contain", borderRadius: "2px", border: "1px solid var(--border)" }} 
-                                    />
-                                  )}
+                      {questions
+                        .filter((q) => questionPartFilter === "All" || q.part_code === questionPartFilter)
+                        .map((q) => (
+                          <tr key={q.id}>
+                            <td style={{ fontWeight: "700", color: "var(--primary)" }}>{q.part_code ? `Part ${q.part_code}` : "-"}</td>
+                            <td style={{ fontWeight: "600" }}>{q.source_s_no !== null && q.source_s_no !== undefined ? q.source_s_no : "-"}</td>
+                            <td style={{ fontWeight: "500", verticalAlign: "top" }}>
+                              <div>{q.question_text}</div>
+                              {q.image_url && (
+                                <div style={{ marginTop: "0.5rem" }}>
+                                  <img 
+                                    src={q.image_url} 
+                                    alt="Question diagram" 
+                                    style={{ maxWidth: "150px", maxHeight: "80px", borderRadius: "4px", border: "1px solid var(--border)" }} 
+                                  />
                                 </div>
-                              ))}
-                            </div>
-                          </td>
-                          <td><span className="badge badge-blue">{q.correct_option}</span></td>
-                          <td style={{ textAlign: "right", fontWeight: "600" }}>{q.marks}</td>
-                          <td style={{ textAlign: "center" }}>
-                            <div style={{ display: "flex", gap: "0.25rem", justifyContent: "center" }}>
-                              <button className="action-btn edit" onClick={() => handleOpenEditQuestion(q)}>
-                                <Edit size={16} />
-                              </button>
-                              <button className="action-btn delete" onClick={() => handleDeleteQuestion(q.id)}>
-                                <Trash2 size={16} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                      {questions.length === 0 && (
+                              )}
+                            </td>
+                            <td style={{ fontSize: "0.85rem", color: "var(--text-secondary)", verticalAlign: "top" }}>
+                              <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                                {[
+                                  { label: "A", val: q.option_a, img: q.option_a_image_url },
+                                  { label: "B", val: q.option_b, img: q.option_b_image_url },
+                                  { label: "C", val: q.option_c, img: q.option_c_image_url },
+                                  { label: "D", val: q.option_d, img: q.option_d_image_url },
+                                ].map((opt) => (
+                                  <div key={opt.label} style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                                    <span style={{ fontWeight: "600" }}>{opt.label}:</span>
+                                    {opt.val && <span>{opt.val}</span>}
+                                    {opt.img && (
+                                      <img 
+                                        src={opt.img} 
+                                        alt={`Opt ${opt.label}`} 
+                                        style={{ height: "28px", objectFit: "contain", borderRadius: "2px", border: "1px solid var(--border)" }} 
+                                      />
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </td>
+                            <td><span className="badge badge-blue">{q.correct_option}</span></td>
+                            <td style={{ textAlign: "right", fontWeight: "600" }}>{q.marks}</td>
+                            <td style={{ textAlign: "center" }}>
+                              <div style={{ display: "flex", gap: "0.25rem", justifyContent: "center" }}>
+                                <button className="action-btn edit" onClick={() => handleOpenEditQuestion(q)}>
+                                  <Edit size={16} />
+                                </button>
+                                <button className="action-btn delete" onClick={() => handleDeleteQuestion(q.id)}>
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      {questions.filter((q) => questionPartFilter === "All" || q.part_code === questionPartFilter).length === 0 && (
                         <tr>
-                          <td colSpan="6" style={{ textAlign: "center", color: "var(--text-muted)" }}>
+                          <td colSpan="7" style={{ textAlign: "center", color: "var(--text-muted)" }}>
                             No questions uploaded yet. Start adding manually or upload Excel sheet.
                           </td>
                         </tr>
@@ -1134,11 +1278,13 @@ const AdminDashboard = () => {
                     onChange={(e) => setLeaderboardCommunity(e.target.value)}
                   >
                     <option value="All">All Communities</option>
+                    <option value="OC">OC / Open Competition</option>
                     <option value="BC">BC</option>
-                    <option value="MBC">MBC</option>
+                    <option value="BCM">BC(M)</option>
+                    <option value="MBC">MBC&DNC</option>
                     <option value="SC">SC</option>
+                    <option value="SCA">SC(A)</option>
                     <option value="ST">ST</option>
-                    <option value="OC">OC / OPEN</option>
                   </select>
 
                   <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer", userSelect: "none", fontSize: "0.9rem", fontWeight: "600" }}>
@@ -1156,14 +1302,20 @@ const AdminDashboard = () => {
                   <table className="table">
                     <thead>
                       <tr>
-                        <th style={{ width: "80px" }}>Original Rank</th>
-                        <th style={{ width: "80px" }}>Active Rank</th>
+                        <th style={{ width: "70px" }}>Orig Rank</th>
+                        <th style={{ width: "70px" }}>Active Rank</th>
+                        <th style={{ width: "70px" }}>Comm Rank</th>
                         <th>Application No</th>
                         <th>Student Name</th>
-                        <th>Community</th>
+                        <th>Community (Raw)</th>
+                        <th>Community (Norm)</th>
+                        <th style={{ textAlign: "right" }}>Quota Seats</th>
+                        <th>Selection Bucket</th>
+                        <th style={{ textAlign: "right" }}>Entrance Score</th>
                         <th style={{ textAlign: "right" }}>UG %</th>
-                        <th style={{ textAlign: "right" }}>Exam Score</th>
-                        <th style={{ textAlign: "right" }}>Exam %</th>
+                        <th style={{ textAlign: "right" }}>Entrance 50%</th>
+                        <th style={{ textAlign: "right" }}>UG 50%</th>
+                        <th style={{ textAlign: "right" }}>Final Score</th>
                         <th>Counselling Status</th>
                         <th style={{ textAlign: "center", width: "180px" }}>Admission Action</th>
                       </tr>
@@ -1184,6 +1336,9 @@ const AdminDashboard = () => {
                         } else if (r.confirmation_status === "Excluded") {
                           badgeColor = "#991b1b";
                           badgeBg = "#fee2e2";
+                        } else if (r.confirmation_status === "Incomplete UG Percentage") {
+                          badgeColor = "#c2410c";
+                          badgeBg = "#ffedd5";
                         }
 
                         return (
@@ -1191,6 +1346,9 @@ const AdminDashboard = () => {
                             <td style={{ textAlign: "center", fontWeight: "600" }}>{r.original_rank}</td>
                             <td style={{ textAlign: "center", fontWeight: "700", color: "var(--primary-dark)" }}>
                               {r.active_rank === -1 ? "-" : r.active_rank}
+                            </td>
+                            <td style={{ textAlign: "center", fontWeight: "600" }}>
+                              {r.community_rank === -1 ? "-" : r.community_rank}
                             </td>
                             <td style={{ fontWeight: "700", color: "var(--primary)" }}>{r.application_number}</td>
                             <td style={{ fontWeight: "600" }}>
@@ -1202,9 +1360,22 @@ const AdminDashboard = () => {
                               )}
                             </td>
                             <td>{r.community}</td>
-                            <td style={{ textAlign: "right" }}>{r.ug_percentage}%</td>
+                            <td style={{ fontWeight: "600" }}>{r.normalized_community}</td>
+                            <td style={{ textAlign: "right", fontWeight: "600" }}>{r.community_seat_count}</td>
+                            <td style={{ fontWeight: "700", color: "var(--primary-dark)" }}>{r.final_selection_bucket_name || "-"}</td>
                             <td style={{ textAlign: "right", fontWeight: "700" }}>{r.score}</td>
-                            <td style={{ textAlign: "right" }}>{r.percentage}%</td>
+                            <td style={{ textAlign: "right" }}>
+                              {r.ug_percentage !== null && r.ug_percentage !== undefined ? `${r.ug_percentage}%` : "Incomplete"}
+                            </td>
+                            <td style={{ textAlign: "right" }}>
+                              {r.entrance_weighted_score !== null && r.entrance_weighted_score !== undefined ? r.entrance_weighted_score : "-"}
+                            </td>
+                            <td style={{ textAlign: "right" }}>
+                              {r.ug_weighted_score !== null && r.ug_weighted_score !== undefined ? r.ug_weighted_score : "-"}
+                            </td>
+                            <td style={{ textAlign: "right", fontWeight: "800", color: "var(--primary-dark)" }}>
+                              {r.final_score !== null && r.final_score !== undefined ? r.final_score : "Incomplete"}
+                            </td>
                             <td>
                               <span style={{ 
                                 fontSize: "0.8rem", 
@@ -1231,7 +1402,7 @@ const AdminDashboard = () => {
                                 <button 
                                   className="btn btn-primary"
                                   onClick={() => handleConfirmAdmission(r.candidate_id, courses.find(c => c.code === leaderboardDegree)?.id)}
-                                  disabled={actionLoading || r.confirmation_status === "Excluded"}
+                                  disabled={actionLoading || r.confirmation_status === "Excluded" || r.confirmation_status === "Incomplete UG Percentage"}
                                   style={{ padding: "0.35rem 0.75rem", fontSize: "0.8rem" }}
                                 >
                                   Confirm Admission
@@ -1243,7 +1414,7 @@ const AdminDashboard = () => {
                       })}
                       {leaderboard.length === 0 && (
                         <tr>
-                          <td colSpan="10" style={{ textAlign: "center", color: "var(--text-muted)", padding: "2rem" }}>
+                          <td colSpan="16" style={{ textAlign: "center", color: "var(--text-muted)", padding: "2rem" }}>
                             No rankings or counselling profiles found.
                           </td>
                         </tr>
@@ -1369,33 +1540,18 @@ const AdminDashboard = () => {
                             <div>
                               <span style={{ fontWeight: "700", color: "var(--primary)" }}>{c.code}</span>
                               <p style={{ margin: 0, fontSize: "0.85rem", color: "var(--text-muted)" }}>{c.name}</p>
+                              {editingCourseId !== c.id && (
+                                <div style={{ marginTop: "0.5rem", display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                                  {communitySeats.filter(s => s.course_id === c.id).map(seat => (
+                                    <span key={seat.id} style={{ fontSize: "0.75rem", backgroundColor: "#fff", padding: "0.15rem 0.4rem", borderRadius: "4px", border: "1px solid var(--border)", color: "var(--text-secondary)" }}>
+                                      <strong>{seat.community_code}:</strong> {seat.seat_count}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                             
-                            {editingCourseId === c.id ? (
-                              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                                <input 
-                                  type="number" 
-                                  className="form-control"
-                                  style={{ width: "80px", padding: "0.35rem" }}
-                                  value={editSeatCount}
-                                  onChange={(e) => setEditSeatCount(parseInt(e.target.value, 10))}
-                                />
-                                <button 
-                                  className="btn btn-primary" 
-                                  style={{ padding: "0.35rem 0.75rem", fontSize: "0.85rem", width: "auto" }}
-                                  onClick={() => handleSaveCourseSeatCount(c.id)}
-                                >
-                                  Save
-                                </button>
-                                <button 
-                                  className="btn btn-secondary" 
-                                  style={{ padding: "0.35rem 0.75rem", fontSize: "0.85rem", width: "auto" }}
-                                  onClick={() => setEditingCourseId(null)}
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            ) : (
+                            {editingCourseId !== c.id && (
                               <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
                                 <span style={{ fontWeight: "700", fontSize: "1rem" }}>{c.seat_count} Seats</span>
                                 <button 
@@ -1403,6 +1559,11 @@ const AdminDashboard = () => {
                                   onClick={() => {
                                     setEditingCourseId(c.id);
                                     setEditSeatCount(c.seat_count);
+                                    const courseSeatsObj = {};
+                                    communitySeats.filter(s => s.course_id === c.id).forEach(s => {
+                                      courseSeatsObj[s.community_code] = s.seat_count;
+                                    });
+                                    setEditCommunitySeats(courseSeatsObj);
                                   }}
                                 >
                                   <Edit size={16} />
@@ -1410,6 +1571,66 @@ const AdminDashboard = () => {
                               </div>
                             )}
                           </div>
+
+                          {editingCourseId === c.id && (
+                            <div style={{ marginTop: "1rem", borderTop: "1px dashed var(--border)", paddingTop: "0.75rem" }}>
+                              <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginBottom: "0.75rem" }}>
+                                <label style={{ fontSize: "0.85rem", fontWeight: "700" }}>Total Capacity:</label>
+                                <input 
+                                  type="number" 
+                                  className="form-control"
+                                  style={{ width: "80px", padding: "0.35rem" }}
+                                  value={editSeatCount}
+                                  onChange={(e) => setEditSeatCount(parseInt(e.target.value, 10) || 0)}
+                                />
+                              </div>
+
+                              <label style={{ fontSize: "0.85rem", fontWeight: "700", display: "block", marginBottom: "0.5rem" }}>Community-wise Seat Distribution:</label>
+                              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
+                                {communitySeats.filter(s => s.course_id === c.id).map(seat => (
+                                  <div key={seat.id} style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                                    <span style={{ fontSize: "0.75rem", fontWeight: "600", color: "var(--text-secondary)" }}>{seat.community_name} ({seat.community_code}):</span>
+                                    <input 
+                                      type="number"
+                                      className="form-control"
+                                      style={{ padding: "0.25rem", width: "100%" }}
+                                      value={editCommunitySeats[seat.community_code] !== undefined ? editCommunitySeats[seat.community_code] : seat.seat_count}
+                                      onChange={(e) => {
+                                        const val = parseInt(e.target.value, 10) || 0;
+                                        setEditCommunitySeats(prev => ({
+                                          ...prev,
+                                          [seat.community_code]: val
+                                        }));
+                                      }}
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "0.5rem" }}>
+                                <div style={{ fontSize: "0.85rem", fontWeight: "700", color: (sumOfEditSeats() === editSeatCount ? "var(--success)" : "var(--danger)") }}>
+                                  Sum of Community Seats: {sumOfEditSeats()} / {editSeatCount}
+                                </div>
+                                <div style={{ display: "flex", gap: "0.5rem" }}>
+                                  <button 
+                                    className="btn btn-secondary" 
+                                    style={{ padding: "0.35rem 0.75rem", fontSize: "0.85rem", width: "auto" }}
+                                    onClick={() => setEditingCourseId(null)}
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button 
+                                    className="btn btn-primary" 
+                                    style={{ padding: "0.35rem 0.75rem", fontSize: "0.85rem", width: "auto" }}
+                                    onClick={() => handleSaveCourseSeatMatrix(c.id)}
+                                    disabled={actionLoading}
+                                  >
+                                    {actionLoading ? "Saving..." : "Save Matrix"}
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -1631,9 +1852,35 @@ const AdminDashboard = () => {
                   </div>
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr", gap: "1rem" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
                   <div className="form-group">
-                    <label className="form-label">Correct Answer Option</label>
+                    <label className="form-label">Part</label>
+                    <select
+                      className="form-control form-select"
+                      value={questionForm.part_code}
+                      onChange={(e) => setQuestionForm({ ...questionForm, part_code: e.target.value })}
+                      required
+                    >
+                      <option value="A">Part A - Quantitative Ability</option>
+                      <option value="B">Part B - Analytical Reasoning</option>
+                      <option value="C">Part C - Logical Reasoning</option>
+                      <option value="D">Part D - Computer Awareness</option>
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Source S. No</label>
+                    <input
+                      className="form-control"
+                      type="number"
+                      placeholder="e.g. 1"
+                      value={questionForm.source_s_no}
+                      onChange={(e) => setQuestionForm({ ...questionForm, source_s_no: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Correct Option</label>
                     <select
                       className="form-control form-select"
                       value={questionForm.correct_option}
@@ -1648,7 +1895,7 @@ const AdminDashboard = () => {
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">Marks Allocated</label>
+                    <label className="form-label">Marks</label>
                     <input
                       className="form-control"
                       type="number"

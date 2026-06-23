@@ -25,6 +25,27 @@ class Course(Base):
     # Relationships
     applications = relationship("StudentApplication", back_populates="course", cascade="all, delete-orphan")
     confirmations = relationship("AdmissionConfirmation", back_populates="course", cascade="all, delete-orphan")
+    community_seats = relationship("CourseCommunitySeat", back_populates="course", cascade="all, delete-orphan")
+
+class CourseCommunitySeat(Base):
+    __tablename__ = "course_community_seats"
+
+    id = Column(Integer, primary_key=True, index=True)
+    course_id = Column(Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=False)
+    community_code = Column(String(50), nullable=False)  # OC, BC, BCM, MBC, SC, SCA, ST
+    community_name = Column(String(100), nullable=False)
+    seat_count = Column(Integer, nullable=False, default=0)
+    display_order = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    # Relationships
+    course = relationship("Course", back_populates="community_seats")
+
+    # Constraints
+    __table_args__ = (
+        UniqueConstraint('course_id', 'community_code', name='_course_community_uc'),
+    )
 
 class Candidate(Base):
     __tablename__ = "candidates"
@@ -165,6 +186,10 @@ class Question(Base):
     option_b_image_url = Column(String(500), nullable=True)
     option_c_image_url = Column(String(500), nullable=True)
     option_d_image_url = Column(String(500), nullable=True)
+    part_code = Column(String(50), nullable=True)  # A, B, C, D
+    part_name = Column(String(255), nullable=True)
+    part_order = Column(Integer, nullable=True)
+    source_s_no = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     # Relationships
@@ -186,6 +211,7 @@ class ExamAttempt(Base):
     percentage = Column(Float, default=0.0)
     is_submitted = Column(Boolean, default=False)
     is_disqualified = Column(Boolean, default=False, server_default="0")
+    question_order_json = Column(Text, nullable=True)
 
     # Constraints
     __table_args__ = (

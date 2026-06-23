@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import Dict, Any, List, Optional
 from app.database import get_db
-from app.models import Admin, Course, Candidate, StudentApplication, ImportBatch, AdmissionConfirmation, Exam, Question, ExamAttempt
-from app.schemas import AdminResponse, Token, CourseBase, CourseUpdate, CounsellingConfirmRequest
+from app.models import Admin, Course, Candidate, StudentApplication, ImportBatch, AdmissionConfirmation, Exam, Question, ExamAttempt, CourseCommunitySeat
+from app.schemas import AdminResponse, Token, CourseBase, CourseUpdate, CounsellingConfirmRequest, CourseCommunitySeatBase, CourseCommunitySeatUpdate
 from app.auth import create_access_token, get_current_admin, verify_password, get_password_hash
 from app.limiter import limiter
 from app.utils.mobile import normalize_mobile
@@ -690,3 +690,45 @@ def update_course(
     db.commit()
     db.refresh(course)
     return course
+
+@router.get("/courses/community-seats", response_model=List[CourseCommunitySeatBase])
+def get_all_community_seats(
+    current_admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    return db.query(CourseCommunitySeat).order_by(CourseCommunitySeat.course_id, CourseCommunitySeat.display_order).all()
+
+@router.put("/courses/{course_id}/community-seats", response_model=List[CourseCommunitySeatBase])
+def update_course_community_seats(
+    course_id: int,
+    payload: List[CourseCommunitySeatUpdate],
+    current_admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found.")
+    
+    proposed_seats = {item.community_code: item.seat_count for item in payload}
+    existing_seats = db.query(CourseCommunitySeat).filter(CourseCommunitySeat.course_id == course_id).all()
+    
+    merged_seats = {}
+    for s in existing_seats:
+        merged_seats[s.community_code] = s.seat_count
+    
+    for code, count in proposed_seats.items():
+        merged_seats[code] = count
+        
+    total_proposed_sum = sum(merged_seats.values())
+    if total_proposed_sum != course.seat_count:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Total community seat count ({total_proposed_sum}) must equal the course total seat count ({course.seat_count})."
+        )
+        
+    for s in existing_seats:
+        if s.community_code in proposed_seats:
+            s.seat_count = proposed_seats[s.community_code]
+            
+    db.commit()
+    return db.query(CourseCommunitySeat).filter(CourseCommunitySeat.course_id == course_id).order_by(CourseCommunitySeat.display_order).all()

@@ -319,6 +319,20 @@ const Exam = () => {
   const progressPercent = questions.length > 0 ? ((Object.keys(answers).length / questions.length) * 100) : 0;
   const answeredCount = Object.keys(answers).filter(k => answers[k] !== null).length;
 
+  const partNames = {
+    "A": "Part A - Quantitative Ability",
+    "B": "Part B - Analytical Reasoning",
+    "C": "Part C - Logical Reasoning",
+    "D": "Part D - Computer Awareness"
+  };
+
+  const getSectionIndex = () => {
+    if (!currentQuestion || !currentQuestion.part_code) return "";
+    const partQs = questions.filter(q => q.part_code === currentQuestion.part_code);
+    const subsetIdx = partQs.findIndex(q => q.id === currentQuestion.id);
+    return `Part ${currentQuestion.part_code}: ${subsetIdx + 1}/${partQs.length}`;
+  };
+
   return (
     <div
       className="exam-layout animate-fade-in"
@@ -442,6 +456,28 @@ const Exam = () => {
         <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginBottom: "1.5rem", textAlign: "right" }}>
           Progress: {answeredCount} / {questions.length} Answered
         </div>
+
+        {currentQuestion && (
+          <div 
+            style={{ 
+              background: "var(--primary-light)", 
+              color: "var(--primary)", 
+              padding: "0.75rem 1rem", 
+              borderRadius: "8px", 
+              fontWeight: "600", 
+              fontSize: "0.95rem", 
+              marginBottom: "1rem",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center"
+            }}
+          >
+            <span>{partNames[currentQuestion.part_code] || `Part ${currentQuestion.part_code}`}</span>
+            <span style={{ fontSize: "0.85rem", background: "var(--primary)", color: "#fff", padding: "0.2rem 0.6rem", borderRadius: "20px" }}>
+              {getSectionIndex()}
+            </span>
+          </div>
+        )}
 
         {currentQuestion && (
           <>
@@ -573,18 +609,33 @@ const Exam = () => {
         {/* Question Grid */}
         <div className="question-grid-box">
           <div className="grid-title">Question Grid</div>
-          <div className="questions-grid">
-            {questions.map((q, idx) => {
-              const isAnswered = !!answers[q.id];
-              const isCurrent = idx === currentIdx;
-              let btnClass = "grid-btn";
-              if (isCurrent) btnClass += " current active";
-              else if (isAnswered) btnClass += " answered";
-              else btnClass += " unanswered";
+          <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+            {["A", "B", "C", "D"].map((pCode) => {
+              const partQs = questions.filter(q => q.part_code === pCode);
+              if (partQs.length === 0) return null;
+              
               return (
-                <button key={q.id} className={btnClass} onClick={() => setCurrentIdx(idx)}>
-                  {idx + 1}
-                </button>
+                <div key={pCode} style={{ borderBottom: "1px dashed var(--border)", paddingBottom: "0.75rem" }}>
+                  <div style={{ fontSize: "0.75rem", fontWeight: "700", color: "var(--primary)", marginBottom: "0.5rem" }}>
+                    {partNames[pCode]}
+                  </div>
+                  <div className="questions-grid">
+                    {partQs.map((q) => {
+                      const overallIdx = questions.findIndex(item => item.id === q.id);
+                      const isAnswered = !!answers[q.id];
+                      const isCurrent = overallIdx === currentIdx;
+                      let btnClass = "grid-btn";
+                      if (isCurrent) btnClass += " current active";
+                      else if (isAnswered) btnClass += " answered";
+                      else btnClass += " unanswered";
+                      return (
+                        <button key={q.id} className={btnClass} onClick={() => setCurrentIdx(overallIdx)}>
+                          {overallIdx + 1}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               );
             })}
           </div>

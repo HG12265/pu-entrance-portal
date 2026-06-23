@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 1 day
     STUDENT_TOKEN_EXPIRE_MINUTES: int = 240  # 4 hours
+    COUNSELLING_MODE: str = "SIMPLE_COMMUNITY_QUOTA"
 
 
     # Seed Admin Settings

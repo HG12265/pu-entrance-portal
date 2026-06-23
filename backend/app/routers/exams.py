@@ -1,4 +1,6 @@
 import datetime
+import json
+import secrets
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -15,8 +17,8 @@ def get_main_exam(db: Session) -> Exam:
     if not exam:
         exam = Exam(
             name="Periyar University Entrance Examination 2026",
-            total_questions=30,
-            duration_minutes=30,
+            total_questions=100,
+            duration_minutes=120,
             start_date=datetime.datetime.utcnow(),
             end_date=datetime.datetime.utcnow() + datetime.timedelta(days=30),
             result_visibility=True
@@ -103,15 +105,38 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
             detail="You have already submitted and completed this examination."
         )
     
-    questions = db.query(Question).filter(Question.exam_id == exam.id).all()
-    if not questions:
+    # Fetch all questions
+    all_questions = db.query(Question).filter(Question.exam_id == exam.id).all()
+    
+    # Strict validation of counts per part
+    part_counts = {"A": 0, "B": 0, "C": 0, "D": 0}
+    for q in all_questions:
+        if q.part_code in part_counts:
+            part_counts[q.part_code] += 1
+            
+    mismatches = []
+    expected_parts = {
+        "A": ("Quantitative Ability", 25),
+        "B": ("Analytical Reasoning", 25),
+        "C": ("Logical Reasoning", 25),
+        "D": ("Computer Awareness", 25)
+    }
+    for p_code, (p_name, expected_count) in expected_parts.items():
+        actual = part_counts[p_code]
+        if actual != expected_count:
+            mismatches.append(f"Part {p_code} ({p_name}): expected {expected_count}, got {actual}")
+            
+    if mismatches:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No questions are available in the question bank for this exam."
+            detail=f"The examination question bank is not configured correctly. Errors: {', '.join(mismatches)}"
         )
-        
-    # Create new attempt if it doesn't exist
+
+    rng = secrets.SystemRandom()
+    questions = []
+
     if not attempt:
+        # Create new attempt
         attempt = ExamAttempt(
             candidate_id=current_candidate.id,
             exam_id=exam.id,
@@ -121,9 +146,34 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
         db.add(attempt)
         db.commit()
         db.refresh(attempt)
-        
-        # Populate empty answers for all questions
-        for q in questions:
+
+        # Shuffle questions within each part code A, B, C, D
+        part_A_qs = [q for q in all_questions if q.part_code == "A"]
+        part_B_qs = [q for q in all_questions if q.part_code == "B"]
+        part_C_qs = [q for q in all_questions if q.part_code == "C"]
+        part_D_qs = [q for q in all_questions if q.part_code == "D"]
+
+        rng.shuffle(part_A_qs)
+        rng.shuffle(part_B_qs)
+        rng.shuffle(part_C_qs)
+        rng.shuffle(part_D_qs)
+
+        # Assemble final ordered list of questions
+        ordered_qs = part_A_qs + part_B_qs + part_C_qs + part_D_qs
+
+        # Store question IDs in order JSON
+        order_json = {
+            "A": [q.id for q in part_A_qs],
+            "B": [q.id for q in part_B_qs],
+            "C": [q.id for q in part_C_qs],
+            "D": [q.id for q in part_D_qs],
+            "final_order": [q.id for q in ordered_qs]
+        }
+        attempt.question_order_json = json.dumps(order_json)
+        db.commit()
+
+        # Create StudentAnswer rows only for the final 100 questions
+        for q in ordered_qs:
             empty_ans = StudentAnswer(
                 attempt_id=attempt.id,
                 question_id=q.id,
@@ -132,6 +182,76 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
                 marks_obtained=0.0
             )
             db.add(empty_ans)
+        db.commit()
+
+        questions = ordered_qs
+    else:
+        # Resume flow: load stored order from attempt.question_order_json
+        if attempt.question_order_json:
+            try:
+                order_json = json.loads(attempt.question_order_json)
+                final_order = order_json.get("final_order", [])
+                
+                # Fetch questions and sort to match final_order exactly
+                q_map = {q.id: q for q in all_questions}
+                questions = [q_map[qid] for qid in final_order if qid in q_map]
+            except Exception as e:
+                # Fallback if json parsing fails: regenerate
+                print(f"[ERROR START EXAM] Failed to parse question_order_json: {e}")
+                part_A_qs = [q for q in all_questions if q.part_code == "A"]
+                part_B_qs = [q for q in all_questions if q.part_code == "B"]
+                part_C_qs = [q for q in all_questions if q.part_code == "C"]
+                part_D_qs = [q for q in all_questions if q.part_code == "D"]
+                rng.shuffle(part_A_qs)
+                rng.shuffle(part_B_qs)
+                rng.shuffle(part_C_qs)
+                rng.shuffle(part_D_qs)
+                ordered_qs = part_A_qs + part_B_qs + part_C_qs + part_D_qs
+                order_json = {
+                    "A": [q.id for q in part_A_qs],
+                    "B": [q.id for q in part_B_qs],
+                    "C": [q.id for q in part_C_qs],
+                    "D": [q.id for q in part_D_qs],
+                    "final_order": [q.id for q in ordered_qs]
+                }
+                attempt.question_order_json = json.dumps(order_json)
+                db.commit()
+                questions = ordered_qs
+        else:
+            # Fallback if column is null
+            part_A_qs = [q for q in all_questions if q.part_code == "A"]
+            part_B_qs = [q for q in all_questions if q.part_code == "B"]
+            part_C_qs = [q for q in all_questions if q.part_code == "C"]
+            part_D_qs = [q for q in all_questions if q.part_code == "D"]
+            rng.shuffle(part_A_qs)
+            rng.shuffle(part_B_qs)
+            rng.shuffle(part_C_qs)
+            rng.shuffle(part_D_qs)
+            ordered_qs = part_A_qs + part_B_qs + part_C_qs + part_D_qs
+            order_json = {
+                "A": [q.id for q in part_A_qs],
+                "B": [q.id for q in part_B_qs],
+                "C": [q.id for q in part_C_qs],
+                "D": [q.id for q in part_D_qs],
+                "final_order": [q.id for q in ordered_qs]
+            }
+            attempt.question_order_json = json.dumps(order_json)
+            db.commit()
+            questions = ordered_qs
+
+        # Ensure StudentAnswer records exist for all questions in final_order
+        existing_answers = db.query(StudentAnswer).filter(StudentAnswer.attempt_id == attempt.id).all()
+        existing_qids = {ans.question_id for ans in existing_answers}
+        for q in questions:
+            if q.id not in existing_qids:
+                empty_ans = StudentAnswer(
+                    attempt_id=attempt.id,
+                    question_id=q.id,
+                    selected_option=None,
+                    is_correct=None,
+                    marks_obtained=0.0
+                )
+                db.add(empty_ans)
         db.commit()
 
     saved_answers = db.query(StudentAnswer).filter(StudentAnswer.attempt_id == attempt.id).all()
@@ -152,6 +272,10 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
             "option_b_image_url": q.option_b_image_url,
             "option_c_image_url": q.option_c_image_url,
             "option_d_image_url": q.option_d_image_url,
+            "part_code": q.part_code,
+            "part_name": q.part_name,
+            "part_order": q.part_order,
+            "source_s_no": q.source_s_no
         })
 
     elapsed_seconds = (now - attempt.started_at).total_seconds()
@@ -189,6 +313,16 @@ def save_answer(
     if attempt.is_submitted:
         raise HTTPException(status_code=400, detail="Cannot edit answers of a submitted exam.")
         
+    # Safeguard: ensure the question is in final_order
+    if attempt.question_order_json:
+        try:
+            order_json = json.loads(attempt.question_order_json)
+            final_order = order_json.get("final_order", [])
+            if payload.question_id not in final_order:
+                raise HTTPException(status_code=400, detail="Question is not part of this exam attempt.")
+        except Exception as e:
+            print(f"[ERROR SAVE ANSWER] Failed to parse question_order_json: {e}")
+
     db_answer = db.query(StudentAnswer).filter(
         StudentAnswer.attempt_id == payload.attempt_id,
         StudentAnswer.question_id == payload.question_id
@@ -229,12 +363,18 @@ def submit_exam(
     degrees_list = [app.course.code for app in current_candidate.applications]
     ug_perc = 0.0
     if current_candidate.applications:
-        # Load from the first available application
         ug_perc = current_candidate.applications[0].ug_marks or 0.0
+
+    # Retrieve and parse question order
+    if not attempt.question_order_json:
+        raise HTTPException(status_code=400, detail="Question order json not found for this attempt.")
+        
+    order_json = json.loads(attempt.question_order_json)
+    final_order = order_json.get("final_order", [])
 
     if attempt.is_submitted:
         saved_answers = db.query(StudentAnswer).filter(StudentAnswer.attempt_id == attempt.id).all()
-        attempted_count = sum(1 for ans in saved_answers if ans.selected_option is not None)
+        attempted_count = sum(1 for ans in saved_answers if ans.selected_option is not None and ans.question_id in final_order)
         
         entrance_perc = attempt.percentage
         final_perc = round((ug_perc * 0.5) + (entrance_perc * 0.5), 2)
@@ -256,7 +396,9 @@ def submit_exam(
             "result_visibility": exam.result_visibility
         }
         
-    questions = db.query(Question).filter(Question.exam_id == exam.id).all()
+    all_questions = db.query(Question).filter(Question.exam_id == exam.id).all()
+    q_map = {q.id: q for q in all_questions}
+    
     saved_answers = db.query(StudentAnswer).filter(StudentAnswer.attempt_id == attempt.id).all()
     answers_map = {ans.question_id: ans for ans in saved_answers}
     
@@ -265,8 +407,12 @@ def submit_exam(
     attempted_count = 0
     total_score = 0.0
     
-    for q in questions:
-        ans = answers_map.get(q.id)
+    # Grade only questions present in the saved final_order
+    for q_id in final_order:
+        q = q_map.get(q_id)
+        if not q:
+            continue
+        ans = answers_map.get(q_id)
         selected = ans.selected_option if ans else None
         
         if selected:
@@ -291,14 +437,14 @@ def submit_exam(
                 
         total_score += score_diff
         
-    max_possible_score = sum([q.marks for q in questions])
+    max_possible_score = sum([q_map[qid].marks for qid in final_order if qid in q_map])
     percentage = 0.0
     if max_possible_score > 0:
         percentage = round((total_score / max_possible_score) * 100, 2)
         
     attempt.is_submitted = True
     attempt.submitted_at = datetime.datetime.utcnow()
-    attempt.total_questions = len(questions)
+    attempt.total_questions = len(final_order)
     attempt.correct_answers = correct_count
     attempt.wrong_answers = wrong_count
     attempt.score = total_score

@@ -22,6 +22,7 @@ Base.metadata.create_all(bind=engine)
 def run_migrations():
     db = SessionLocal()
     try:
+        # Columns for questions table
         cols_to_add = ["image_url", "option_a_image_url", "option_b_image_url", "option_c_image_url", "option_d_image_url"]
         for col in cols_to_add:
             res = db.execute(text(f"SHOW COLUMNS FROM questions LIKE '{col}'")).fetchone()
@@ -29,6 +30,28 @@ def run_migrations():
                 db.execute(text(f"ALTER TABLE questions ADD COLUMN {col} VARCHAR(500) NULL"))
                 db.commit()
                 print(f"Migration: Column '{col}' added to questions table.")
+
+        # Part columns for questions table
+        part_cols = {
+            "part_code": "VARCHAR(50) NULL",
+            "part_name": "VARCHAR(255) NULL",
+            "part_order": "INT NULL",
+            "source_s_no": "INT NULL"
+        }
+        for col, col_type in part_cols.items():
+            res = db.execute(text(f"SHOW COLUMNS FROM questions LIKE '{col}'")).fetchone()
+            if not res:
+                db.execute(text(f"ALTER TABLE questions ADD COLUMN {col} {col_type}"))
+                db.commit()
+                print(f"Migration: Column '{col}' added to questions table.")
+
+        # Shuffling serialization column for exam_attempts table
+        res = db.execute(text("SHOW COLUMNS FROM exam_attempts LIKE 'question_order_json'")).fetchone()
+        if not res:
+            db.execute(text("ALTER TABLE exam_attempts ADD COLUMN question_order_json TEXT NULL"))
+            db.commit()
+            print("Migration: Column 'question_order_json' added to exam_attempts table.")
+
     except Exception as e:
         print(f"Migration warning: {e}")
     finally:
@@ -64,8 +87,8 @@ def seed_default_courses():
         from app.models import Course
         courses = [
             {"code": "MCA", "name": "Master of Computer Applications", "seat_count": 30},
-            {"code": "MSC_CS", "name": "M.Sc Computer Science", "seat_count": 45},
-            {"code": "MSC_DS", "name": "M.Sc Data Science", "seat_count": 30}
+            {"code": "MSC_CS", "name": "M.Sc Computer Science", "seat_count": 44},
+            {"code": "MSC_DS", "name": "M.Sc Data Science", "seat_count": 44}
         ]
         for c in courses:
             existing = db.query(Course).filter(Course.code == c["code"]).first()
@@ -77,6 +100,9 @@ def seed_default_courses():
                     is_active=True
                 )
                 db.add(new_c)
+            else:
+                if existing.seat_count != c["seat_count"]:
+                    existing.seat_count = c["seat_count"]
         db.commit()
         print("Default courses checked/seeded successfully.")
     except Exception as e:
@@ -86,6 +112,102 @@ def seed_default_courses():
         db.close()
 
 seed_default_courses()
+
+def seed_default_community_seats():
+    db = SessionLocal()
+    try:
+        from app.models import Course, CourseCommunitySeat
+        community_seats_data = {
+            "MCA": [
+                {"code": "OC", "name": "Open Competition", "seats": 9, "order": 1},
+                {"code": "BC", "name": "Backward Class", "seats": 8, "order": 2},
+                {"code": "BCM", "name": "Backward Class Muslim", "seats": 1, "order": 3},
+                {"code": "MBC", "name": "Most Backward Class", "seats": 6, "order": 4},
+                {"code": "SC", "name": "Scheduled Caste", "seats": 4, "order": 5},
+                {"code": "SCA", "name": "Scheduled Caste Arunthathiyar", "seats": 1, "order": 6},
+                {"code": "ST", "name": "Scheduled Tribe", "seats": 1, "order": 7},
+            ],
+            "MSC_CS": [
+                {"code": "OC", "name": "Open Competition", "seats": 14, "order": 1},
+                {"code": "BC", "name": "Backward Class", "seats": 12, "order": 2},
+                {"code": "BCM", "name": "Backward Class Muslim", "seats": 2, "order": 3},
+                {"code": "MBC", "name": "Most Backward Class", "seats": 9, "order": 4},
+                {"code": "SC", "name": "Scheduled Caste", "seats": 5, "order": 5},
+                {"code": "SCA", "name": "Scheduled Caste Arunthathiyar", "seats": 1, "order": 6},
+                {"code": "ST", "name": "Scheduled Tribe", "seats": 1, "order": 7},
+            ],
+            "MSC_DS": [
+                {"code": "OC", "name": "Open Competition", "seats": 14, "order": 1},
+                {"code": "BC", "name": "Backward Class", "seats": 12, "order": 2},
+                {"code": "BCM", "name": "Backward Class Muslim", "seats": 2, "order": 3},
+                {"code": "MBC", "name": "Most Backward Class", "seats": 9, "order": 4},
+                {"code": "SC", "name": "Scheduled Caste", "seats": 5, "order": 5},
+                {"code": "ST", "name": "Scheduled Tribe", "seats": 1, "order": 7},
+                {"code": "SCA", "name": "Scheduled Caste Arunthathiyar", "seats": 1, "order": 6},
+            ]
+        }
+        for course_code, seats_list in community_seats_data.items():
+            course_obj = db.query(Course).filter(Course.code == course_code).first()
+            if course_obj:
+                for seat_info in seats_list:
+                    existing_seat = db.query(CourseCommunitySeat).filter(
+                        CourseCommunitySeat.course_id == course_obj.id,
+                        CourseCommunitySeat.community_code == seat_info["code"]
+                    ).first()
+                    if not existing_seat:
+                        new_seat = CourseCommunitySeat(
+                            course_id=course_obj.id,
+                            community_code=seat_info["code"],
+                            community_name=seat_info["name"],
+                            seat_count=seat_info["seats"],
+                            display_order=seat_info["order"]
+                        )
+                        db.add(new_seat)
+                    else:
+                        existing_seat.seat_count = seat_info["seats"]
+                        existing_seat.display_order = seat_info["order"]
+        db.commit()
+        print("Default community seats seeded/updated successfully.")
+    except Exception as e:
+        print(f"Error seeding community seats: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+seed_default_community_seats()
+
+def seed_default_exam():
+    db = SessionLocal()
+    try:
+        from app.models import Exam
+        import datetime
+        exam = db.query(Exam).first()
+        start = datetime.datetime(2026, 6, 20, 0, 0, 0)
+        end = datetime.datetime(2026, 7, 5, 23, 59, 59)
+        if not exam:
+            exam = Exam(
+                name="Periyar University Entrance Examination 2026",
+                total_questions=100,
+                duration_minutes=120,
+                start_date=start,
+                end_date=end,
+                result_visibility=True
+            )
+            db.add(exam)
+            print("Exam seeded successfully.")
+        else:
+            exam.total_questions = 100
+            exam.duration_minutes = 120
+            exam.start_date = start
+            exam.end_date = end
+        db.commit()
+    except Exception as e:
+        print(f"Error seeding exam: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+seed_default_exam()
 
 
 app = FastAPI(

@@ -113,6 +113,7 @@ const Instructions = () => {
         )}
 
         <ul className="instructions-list">
+          <li><strong>Official Schedule:</strong> The examination is scheduled for <strong>June 29, 2026</strong>. The duration is <strong>120 minutes (2 hours)</strong> containing <strong>100 questions</strong>.</li>
           <li><strong>Single Attempt Only:</strong> You cannot attempt the test twice with the same Application Number.</li>
           <li><strong>Auto-Save Progress:</strong> Your selected answers are updated automatically and saved securely in real-time. If you lose internet connectivity or refresh, you can resume.</li>
           <li><strong>Timer Auto-Submission:</strong> Once the timer hits zero, your exam will submit automatically, and no further edits will be recorded.</li>

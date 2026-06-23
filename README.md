@@ -148,5 +148,61 @@ The root directory contains a database reset utility `clear_db.py` that clears a
 >
 > The script will check the `ENVIRONMENT` variable and refuse to execute if set to `production`, `prod`, or `staging`.
 
+---
+
+## 🏫 Counselling Seat Matrix & Reservation Modes
+
+The portal includes an official community-wise seat matrix with support for order-independent community normalization and two distinct reservation/counselling modes:
+
+### 1. Official Course Capacities
+- **MCA** (30 seats): OC=9, BC=8, BCM=1, MBC=6, SC=4, ST=1, SCA=1.
+- **M.Sc Computer Science** (44 seats): OC=14, BC=12, BCM=2, MBC=9, SC=5, SCA=1, ST=1.
+- **M.Sc Data Science** (44 seats): OC=14, BC=12, BCM=2, MBC=9, SC=5, ST=1, SCA=1.
+
+### 2. Counselling Modes
+The active mode is configured via the `COUNSELLING_MODE` environment variable in the backend:
+- **`SIMPLE_COMMUNITY_QUOTA`**: Candidates compete strictly within their respective community quota seat allocation limits.
+- **`OPEN_COMPETITION_THEN_QUOTA`**: First, OC (Open Competition) seats are filled by the top overall candidates regardless of their community. Then, remaining candidates compete within their respective community quota seats.
+
+Administrators can edit the seat matrix dynamically in the **Config Settings** tab on the Admin Dashboard, which performs real-time validation to ensure the sum of community seats matches the total course capacity. The **Counselling & Rankings** tab displays the computed original rank, active rank, community rank, community quota seat count, selection bucket, and counselling status.
+
+---
+
+## 🧪 Mock Counselling Filter Test Data
+
+For local development and testing, you can seed a mock dataset designed to verify open competition, community allocation, and multi-course candidate exclusions.
+
+### 1. Seed Mock Counselling Data
+To populate mock candidates, applications, and submitted attempts for MCA and M.Sc CS, run the seeder:
+```bash
+docker compose exec backend python app/seed_mock_counselling_data.py
+```
+To clear previous mock records first:
+```bash
+docker compose exec backend python app/seed_mock_counselling_data.py --delete-existing-mock
+```
+
+### 2. Verify Counselling Filters
+To run automated filter and selection assertions (checking OC/BC/MBC/SC/SCA/ST buckets, shared candidate exclusion logic, etc.), execute:
+```bash
+docker compose exec backend python app/verify_mock_counselling_filters.py
+```
+
+---
+
+## 🧹 Cleanup Operational Data Only
+
+For resetting student, registration, attempt, and answer data while preserving system courses, admin logins, seat configurations, and exam rules, use the operational cleanup script.
+
+### 1. Dry Run (View current operational and config counts)
+```bash
+docker compose exec backend python app/cleanup_operational_data.py
+```
+
+### 2. Confirmed Deletion
+```bash
+docker compose exec backend python app/cleanup_operational_data.py --confirm
+```
+
 
 

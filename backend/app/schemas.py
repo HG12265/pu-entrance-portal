@@ -97,6 +97,20 @@ class CourseUpdate(BaseModel):
     seat_count: int
     is_active: Optional[bool] = True
 
+class CourseCommunitySeatBase(BaseModel):
+    id: int
+    course_id: int
+    community_code: str
+    community_name: str
+    seat_count: int
+    display_order: int
+    class Config:
+        from_attributes = True
+
+class CourseCommunitySeatUpdate(BaseModel):
+    community_code: str
+    seat_count: int
+
 # Exam Schemas
 class ExamBase(BaseModel):
     name: str
@@ -129,6 +143,10 @@ class QuestionBase(BaseModel):
     option_b_image_url: Optional[str] = None
     option_c_image_url: Optional[str] = None
     option_d_image_url: Optional[str] = None
+    part_code: Optional[str] = None
+    part_name: Optional[str] = None
+    part_order: Optional[int] = None
+    source_s_no: Optional[int] = None
 
 class QuestionCreate(QuestionBase):
     pass
@@ -154,6 +172,10 @@ class QuestionResponseForStudent(BaseModel):
     option_b_image_url: Optional[str] = None
     option_c_image_url: Optional[str] = None
     option_d_image_url: Optional[str] = None
+    part_code: Optional[str] = None
+    part_name: Optional[str] = None
+    part_order: Optional[int] = None
+    source_s_no: Optional[int] = None
     class Config:
         from_attributes = True
 
@@ -200,7 +222,7 @@ class CourseRankingEntry(BaseModel):
     student_name: str
     degrees: List[str]
     community: str
-    ug_percentage: float
+    ug_percentage: Optional[float] = None
     score: float           # Exam marks
     percentage: float      # Exam percentage
     correct_answers: int
@@ -210,6 +232,21 @@ class CourseRankingEntry(BaseModel):
     is_eligible: bool      # active_rank <= seat_count
     confirmation_status: str  # "Eligible", "Waitlisted", "Confirmed"
     excluded_reason: Optional[str] = None # e.g. "Admitted to MCA"
+    raw_community: str
+    normalized_community: str
+    open_competition_rank: int
+    community_rank: int
+    community_seat_count: int
+    final_selection_bucket_code: str
+    final_selection_bucket_name: str
+    community_eligibility_status: str
+    entrance_score: float
+    entrance_total_marks: float
+    entrance_percentage: float
+    entrance_weighted_score: float
+    ug_weighted_score: Optional[float] = None
+    final_score: Optional[float] = None
+    final_score_breakdown_text: Optional[str] = None
 
 # Counseling Confirm Request
 class CounsellingConfirmRequest(BaseModel):
