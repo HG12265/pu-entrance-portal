@@ -99,10 +99,10 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
         ExamAttempt.exam_id == exam.id
     ).first()
     
-    if attempt and attempt.is_submitted:
+    if attempt and attempt.status in ["submitted", "auto_submitted", "force_submitted"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You have already submitted and completed this examination."
+            detail="Your exam has already been submitted. Please contact admin if this was accidental."
         )
     
     # Fetch all questions
@@ -141,7 +141,9 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
             candidate_id=current_candidate.id,
             exam_id=exam.id,
             started_at=now,
-            is_submitted=False
+            is_submitted=False,
+            status="active",
+            violation_count=0
         )
         db.add(attempt)
         db.commit()
@@ -185,6 +187,10 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
         db.commit()
 
         questions = ordered_qs
+        
+        # Log event
+        from app.utils.event_logger import log_event
+        log_event(db, attempt.id, current_candidate.id, "started", "Exam session started by candidate")
     else:
         # Resume flow: load stored order from attempt.question_order_json
         if attempt.question_order_json:
@@ -254,8 +260,38 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
                 db.add(empty_ans)
         db.commit()
 
+    # Load saved answers and compute session states
     saved_answers = db.query(StudentAnswer).filter(StudentAnswer.attempt_id == attempt.id).all()
     answers_map = {ans.question_id: ans.selected_option for ans in saved_answers}
+
+    order_json = json.loads(attempt.question_order_json)
+    final_order = order_json.get("final_order", [])
+
+    first_unanswered_index = 0
+    answered_count = 0
+    found_first_unanswered = False
+
+    for idx, qid in enumerate(final_order):
+        sel = answers_map.get(qid)
+        if sel is not None:
+            answered_count += 1
+        else:
+            if not found_first_unanswered:
+                first_unanswered_index = idx
+                found_first_unanswered = True
+
+    unanswered_count = len(final_order) - answered_count
+    current_question_index = attempt.current_question_index if attempt.current_question_index is not None else first_unanswered_index
+
+    # Log resumed event
+    from app.utils.event_logger import log_event
+    log_event(
+        db,
+        attempt.id,
+        current_candidate.id,
+        "resumed",
+        f"Exam attempt resumed. Current index: {current_question_index}. Violation count: {attempt.violation_count}"
+    )
 
     questions_list = []
     for q in questions:
@@ -279,16 +315,23 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
         })
 
     elapsed_seconds = (now - attempt.started_at).total_seconds()
-    duration_seconds = exam.duration_minutes * 60
+    duration_seconds = (exam.duration_minutes + attempt.time_extension_minutes) * 60
     remaining_seconds = max(0, int(duration_seconds - elapsed_seconds))
 
     return {
         "attempt_id": attempt.id,
         "exam_name": exam.name,
         "duration_minutes": exam.duration_minutes,
+        "time_extension_minutes": attempt.time_extension_minutes,
         "remaining_seconds": remaining_seconds,
         "questions": questions_list,
-        "answers": answers_map
+        "answers": answers_map,
+        "current_question_index": current_question_index,
+        "first_unanswered_index": first_unanswered_index,
+        "answered_count": answered_count,
+        "unanswered_count": unanswered_count,
+        "violation_count": attempt.violation_count,
+        "status": attempt.status
     }
 
 class SaveAnswerPayload(BaseModel):
@@ -310,8 +353,8 @@ def save_answer(
     
     if not attempt:
         raise HTTPException(status_code=404, detail="Exam attempt not found.")
-    if attempt.is_submitted:
-        raise HTTPException(status_code=400, detail="Cannot edit answers of a submitted exam.")
+    if attempt.status not in ["active", "admin_reopened"]:
+        raise HTTPException(status_code=400, detail="Cannot edit answers of a submitted or inactive exam.")
         
     # Safeguard: ensure the question is in final_order
     if attempt.question_order_json:
@@ -336,11 +379,27 @@ def save_answer(
         db.add(db_answer)
         
     db_answer.selected_option = payload.selected_option.upper() if payload.selected_option else None
+    db_answer.updated_at = datetime.datetime.utcnow()
+    attempt.last_activity_at = datetime.datetime.utcnow()
     db.commit()
+    
+    # Write event log
+    from app.utils.event_logger import log_event
+    log_event(
+        db,
+        attempt.id,
+        current_candidate.id,
+        "answer_saved",
+        f"Answer saved for question {payload.question_id}: {payload.selected_option}",
+        metadata={"question_id": payload.question_id, "selected_option": payload.selected_option}
+    )
+    
     return {"status": "saved"}
 
 class SubmitExamPayload(BaseModel):
     attempt_id: int
+    submit_source: Optional[str] = "manual"  # manual, auto_tab_violation, time_over, admin_force
+    submitted_reason: Optional[str] = None
 
 @router.post("/submit", response_model=ExamSubmitResultResponse)
 def submit_exam(
@@ -372,7 +431,7 @@ def submit_exam(
     order_json = json.loads(attempt.question_order_json)
     final_order = order_json.get("final_order", [])
 
-    if attempt.is_submitted:
+    if attempt.is_submitted and attempt.status in ["submitted", "auto_submitted", "force_submitted"]:
         saved_answers = db.query(StudentAnswer).filter(StudentAnswer.attempt_id == attempt.id).all()
         attempted_count = sum(1 for ans in saved_answers if ans.selected_option is not None and ans.question_id in final_order)
         
@@ -395,67 +454,47 @@ def submit_exam(
             "final_percentage": final_perc,
             "result_visibility": exam.result_visibility
         }
-        
-    all_questions = db.query(Question).filter(Question.exam_id == exam.id).all()
-    q_map = {q.id: q for q in all_questions}
-    
-    saved_answers = db.query(StudentAnswer).filter(StudentAnswer.attempt_id == attempt.id).all()
-    answers_map = {ans.question_id: ans for ans in saved_answers}
-    
-    correct_count = 0
-    wrong_count = 0
-    attempted_count = 0
-    total_score = 0.0
-    
-    # Grade only questions present in the saved final_order
-    for q_id in final_order:
-        q = q_map.get(q_id)
-        if not q:
-            continue
-        ans = answers_map.get(q_id)
-        selected = ans.selected_option if ans else None
-        
-        if selected:
-            attempted_count += 1
-            if selected.upper() == q.correct_option.upper():
-                correct_count += 1
-                score_diff = q.marks
-                if ans:
-                    ans.is_correct = True
-                    ans.marks_obtained = score_diff
-            else:
-                wrong_count += 1
-                score_diff = 0.0
-                if ans:
-                    ans.is_correct = False
-                    ans.marks_obtained = score_diff
-        else:
-            score_diff = 0.0
-            if ans:
-                ans.is_correct = None
-                ans.marks_obtained = score_diff
-                
-        total_score += score_diff
-        
-    max_possible_score = sum([q_map[qid].marks for qid in final_order if qid in q_map])
-    percentage = 0.0
-    if max_possible_score > 0:
-        percentage = round((total_score / max_possible_score) * 100, 2)
-        
+
+    # Grade attempt and update score using scoring helper
+    from app.utils.scoring import calculate_and_save_score
+    calculate_and_save_score(db, attempt)
+
+    now = datetime.datetime.utcnow()
+    # Calculate elapsed_seconds_at_submit and cap it
+    elapsed = (now - attempt.started_at).total_seconds()
+    total_duration_sec = (exam.duration_minutes + attempt.time_extension_minutes) * 60
+    attempt.elapsed_seconds_at_submit = max(0, min(int(elapsed), int(total_duration_sec)))
+
     attempt.is_submitted = True
-    attempt.submitted_at = datetime.datetime.utcnow()
-    attempt.total_questions = len(final_order)
-    attempt.correct_answers = correct_count
-    attempt.wrong_answers = wrong_count
-    attempt.score = total_score
-    attempt.percentage = percentage
-    
+    attempt.submitted_at = now
+    attempt.submit_source = payload.submit_source or "manual"
+    attempt.submitted_reason = payload.submitted_reason
+    attempt.status = "auto_submitted" if payload.submit_source == "auto_tab_violation" else "submitted"
+
     db.commit()
     db.refresh(attempt)
-    
+
+    # Log event
+    from app.utils.event_logger import log_event
+    log_event(
+        db,
+        attempt.id,
+        current_candidate.id,
+        "auto_submitted" if attempt.status == "auto_submitted" else "manual_submitted",
+        f"Exam attempt submitted. Source: {attempt.submit_source}. Reason: {attempt.submitted_reason}",
+        metadata={
+            "submit_source": attempt.submit_source,
+            "submitted_reason": attempt.submitted_reason,
+            "elapsed_seconds": attempt.elapsed_seconds_at_submit,
+            "score": attempt.score
+        }
+    )
+
+    saved_answers = db.query(StudentAnswer).filter(StudentAnswer.attempt_id == attempt.id).all()
+    attempted_count = sum(1 for ans in saved_answers if ans.selected_option is not None and ans.question_id in final_order)
     entrance_perc = attempt.percentage
     final_perc = round((ug_perc * 0.5) + (entrance_perc * 0.5), 2)
-    
+
     return {
         "attempt_id": attempt.id,
         "mobile_number": current_candidate.mobile_number,
@@ -472,3 +511,66 @@ def submit_exam(
         "final_percentage": final_perc,
         "result_visibility": exam.result_visibility
     }
+
+class UpdateIndexPayload(BaseModel):
+    attempt_id: int
+    current_question_index: int
+
+@router.post("/update-index")
+def update_current_index(
+    payload: UpdateIndexPayload,
+    current_candidate: Candidate = Depends(get_current_candidate),
+    db: Session = Depends(get_db)
+):
+    attempt = db.query(ExamAttempt).filter(
+        ExamAttempt.id == payload.attempt_id,
+        ExamAttempt.candidate_id == current_candidate.id
+    ).first()
+    
+    if not attempt:
+        raise HTTPException(status_code=404, detail="Exam attempt not found.")
+    if attempt.status not in ["active", "admin_reopened"]:
+        raise HTTPException(status_code=400, detail="Cannot update progress of an inactive exam.")
+        
+    attempt.current_question_index = payload.current_question_index
+    attempt.last_activity_at = datetime.datetime.utcnow()
+    db.commit()
+    return {"status": "success"}
+
+class LogViolationPayload(BaseModel):
+    attempt_id: int
+    violation_message: str
+
+@router.post("/log-violation")
+def log_violation(
+    payload: LogViolationPayload,
+    current_candidate: Candidate = Depends(get_current_candidate),
+    db: Session = Depends(get_db)
+):
+    attempt = db.query(ExamAttempt).filter(
+        ExamAttempt.id == payload.attempt_id,
+        ExamAttempt.candidate_id == current_candidate.id
+    ).first()
+    
+    if not attempt:
+        raise HTTPException(status_code=404, detail="Exam attempt not found.")
+    if attempt.status not in ["active", "admin_reopened"]:
+        raise HTTPException(status_code=400, detail="Cannot log violation for inactive exam.")
+        
+    attempt.violation_count += 1
+    attempt.last_activity_at = datetime.datetime.utcnow()
+    db.commit()
+    
+    # Write event log
+    from app.utils.event_logger import log_event
+    log_event(
+        db, 
+        attempt.id, 
+        current_candidate.id, 
+        "tab_violation", 
+        payload.violation_message,
+        metadata={"violation_count": attempt.violation_count}
+    )
+    
+    return {"status": "success", "violation_count": attempt.violation_count}
+

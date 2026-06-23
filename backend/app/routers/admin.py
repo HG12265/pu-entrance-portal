@@ -5,11 +5,12 @@ import datetime
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, status, Request, UploadFile, File, Query
 from fastapi.security import OAuth2PasswordRequestForm
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import Dict, Any, List, Optional
 from app.database import get_db
-from app.models import Admin, Course, Candidate, StudentApplication, ImportBatch, AdmissionConfirmation, Exam, Question, ExamAttempt, CourseCommunitySeat
+from app.models import Admin, Course, Candidate, StudentApplication, ImportBatch, AdmissionConfirmation, Exam, Question, ExamAttempt, CourseCommunitySeat, StudentAnswer
 from app.schemas import AdminResponse, Token, CourseBase, CourseUpdate, CounsellingConfirmRequest, CourseCommunitySeatBase, CourseCommunitySeatUpdate
 from app.auth import create_access_token, get_current_admin, verify_password, get_password_hash
 from app.limiter import limiter
@@ -732,3 +733,231 @@ def update_course_community_seats(
             
     db.commit()
     return db.query(CourseCommunitySeat).filter(CourseCommunitySeat.course_id == course_id).order_by(CourseCommunitySeat.display_order).all()
+
+
+class ReopenPayload(BaseModel):
+    reason: str
+    time_extension_minutes: Optional[int] = 0
+
+class ForceSubmitPayload(BaseModel):
+    reason: Optional[str] = None
+
+@router.get("/attempts/search")
+def search_attempts(
+    query: str = Query(..., description="Search by application number or mobile number"),
+    current_admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    query_str = query.strip()
+    
+    # Check applications first
+    applications = db.query(StudentApplication).filter(
+        (StudentApplication.application_number == query_str) |
+        (StudentApplication.mobile_number == query_str)
+    ).all()
+    
+    candidate_ids = list(set([app.candidate_id for app in applications]))
+    
+    # If no candidate found via applications, check candidates directly
+    if not candidate_ids:
+        candidates = db.query(Candidate).filter(
+            (Candidate.mobile_number == query_str) |
+            (Candidate.full_name.like(f"%{query_str}%"))
+        ).all()
+        candidate_ids = [c.id for c in candidates]
+        
+    if not candidate_ids:
+        return []
+
+    # Fetch attempts
+    attempts = db.query(ExamAttempt).filter(ExamAttempt.candidate_id.in_(candidate_ids)).all()
+    attempts_map = {att.candidate_id: att for att in attempts}
+    
+    results = []
+    for cid in candidate_ids:
+        candidate = db.query(Candidate).filter(Candidate.id == cid).first()
+        if not candidate:
+            continue
+            
+        c_apps = db.query(StudentApplication).filter(StudentApplication.candidate_id == cid).all()
+        app_details = []
+        for app in c_apps:
+            app_details.append({
+                "application_number": app.application_number,
+                "course_code": app.course_code,
+                "course_name": app.course_name,
+                "ug_marks": app.ug_marks,
+                "community": app.community
+            })
+            
+        attempt = attempts_map.get(cid)
+        if attempt:
+            # Count answered questions present in final_order
+            answered = 0
+            total_q = attempt.total_questions or 100
+            if attempt.question_order_json:
+                try:
+                    order_json = json.loads(attempt.question_order_json)
+                    final_order = order_json.get("final_order", [])
+                    total_q = len(final_order)
+                    saved_answers = db.query(StudentAnswer).filter(StudentAnswer.attempt_id == attempt.id).all()
+                    answered = sum(1 for ans in saved_answers if ans.selected_option is not None and ans.question_id in final_order)
+                except Exception as e:
+                    print(f"Error parsing order json in search: {e}")
+                    
+            unanswered = max(0, total_q - answered)
+            
+            results.append({
+                "attempt_id": attempt.id,
+                "candidate": {
+                    "id": candidate.id,
+                    "full_name": candidate.full_name,
+                    "mobile_number": candidate.mobile_number,
+                    "email": candidate.email
+                },
+                "applications": app_details,
+                "status": attempt.status,
+                "answered_count": answered,
+                "unanswered_count": unanswered,
+                "score": attempt.score,
+                "submitted_at": attempt.submitted_at,
+                "violation_count": attempt.violation_count,
+                "submitted_reason": attempt.submitted_reason,
+                "submit_source": attempt.submit_source,
+                "reopen_count": attempt.reopen_count,
+                "last_activity_at": attempt.last_activity_at,
+                "time_extension_minutes": attempt.time_extension_minutes
+            })
+        else:
+            results.append({
+                "attempt_id": None,
+                "candidate": {
+                    "id": candidate.id,
+                    "full_name": candidate.full_name,
+                    "mobile_number": candidate.mobile_number,
+                    "email": candidate.email
+                },
+                "applications": app_details,
+                "status": "not_started",
+                "answered_count": 0,
+                "unanswered_count": 100,
+                "score": 0.0,
+                "submitted_at": None,
+                "violation_count": 0,
+                "submitted_reason": None,
+                "submit_source": None,
+                "reopen_count": 0,
+                "last_activity_at": None,
+                "time_extension_minutes": 0
+            })
+            
+    return results
+
+@router.post("/attempts/{attempt_id}/reopen")
+def reopen_attempt(
+    attempt_id: int,
+    payload: ReopenPayload,
+    current_admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    attempt = db.query(ExamAttempt).filter(ExamAttempt.id == attempt_id).first()
+    if not attempt:
+        raise HTTPException(status_code=404, detail="Exam attempt not found.")
+        
+    if attempt.status not in ["submitted", "auto_submitted", "force_submitted"]:
+        raise HTTPException(status_code=400, detail=f"Cannot reopen an attempt with status '{attempt.status}'. Only submitted, auto_submitted, or force_submitted attempts can be reopened.")
+        
+    # Capture old details in event log metadata before clearing
+    answered_count = 0
+    if attempt.question_order_json:
+        try:
+            order_json = json.loads(attempt.question_order_json)
+            final_order = order_json.get("final_order", [])
+            saved_answers = db.query(StudentAnswer).filter(StudentAnswer.attempt_id == attempt.id).all()
+            answered_count = sum(1 for ans in saved_answers if ans.selected_option is not None and ans.question_id in final_order)
+        except Exception as e:
+            print(f"Error parsing order json in reopen: {e}")
+
+    old_metadata = {
+        "old_score": attempt.score,
+        "old_submitted_at": attempt.submitted_at.isoformat() if attempt.submitted_at else None,
+        "old_submit_source": attempt.submit_source,
+        "old_answered_count": answered_count,
+        "reason": payload.reason
+    }
+
+    # Adjust started_at to maintain remaining time
+    attempt.started_at = datetime.datetime.utcnow() - datetime.timedelta(seconds=attempt.elapsed_seconds_at_submit)
+        
+    # Update fields
+    attempt.status = "admin_reopened"
+    attempt.is_submitted = False
+    attempt.submitted_at = None
+    attempt.reopened_by_admin_id = current_admin.id
+    attempt.reopened_at = datetime.datetime.utcnow()
+    attempt.reopen_reason = payload.reason
+    attempt.reopen_count += 1
+    attempt.time_extension_minutes += payload.time_extension_minutes or 0
+    # Clear score/final percentage so candidate temporarily disappears from rankings/counselling until resubmitted
+    attempt.score = 0.0
+    attempt.percentage = 0.0
+    
+    db.commit()
+    
+    # Write event log
+    from app.utils.event_logger import log_event
+    log_event(
+        db,
+        attempt.id,
+        attempt.candidate_id,
+        "admin_reopened",
+        f"Attempt reopened by admin ID {current_admin.id}. Reason: {payload.reason}. Extension: {payload.time_extension_minutes} min",
+        metadata=old_metadata
+    )
+    
+    return {"status": "success", "message": "Attempt reopened successfully."}
+
+@router.post("/attempts/{attempt_id}/force-submit")
+def force_submit_attempt(
+    attempt_id: int,
+    payload: ForceSubmitPayload,
+    current_admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    attempt = db.query(ExamAttempt).filter(ExamAttempt.id == attempt_id).first()
+    if not attempt:
+        raise HTTPException(status_code=404, detail="Exam attempt not found.")
+        
+    if attempt.status in ["submitted", "auto_submitted", "force_submitted"] and attempt.is_submitted:
+         raise HTTPException(status_code=400, detail="Exam attempt is already submitted.")
+         
+    # Grade attempt and calculate elapsed_seconds_at_submit
+    from app.utils.scoring import calculate_and_save_score
+    calculate_and_save_score(db, attempt)
+
+    now = datetime.datetime.utcnow()
+    elapsed = (now - attempt.started_at).total_seconds()
+    exam = db.query(Exam).filter(Exam.id == attempt.exam_id).first()
+    total_duration_sec = ((exam.duration_minutes if exam else 120) + attempt.time_extension_minutes) * 60
+    attempt.elapsed_seconds_at_submit = max(0, min(int(elapsed), int(total_duration_sec)))
+    
+    attempt.status = "force_submitted"
+    attempt.is_submitted = True
+    attempt.submitted_at = now
+    attempt.submit_source = "admin_force"
+    attempt.submitted_reason = payload.reason or "Force submitted by admin"
+    
+    db.commit()
+    
+    # Write event log
+    from app.utils.event_logger import log_event
+    log_event(
+        db,
+        attempt.id,
+        attempt.candidate_id,
+        "force_submitted",
+        f"Attempt force-submitted by admin. Reason: {payload.reason}",
+        metadata={"admin_id": current_admin.id, "reason": payload.reason}
+    )
+    
+    return {"status": "success", "message": "Attempt force-submitted successfully."}

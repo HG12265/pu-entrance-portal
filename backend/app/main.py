@@ -52,6 +52,35 @@ def run_migrations():
             db.commit()
             print("Migration: Column 'question_order_json' added to exam_attempts table.")
 
+        # Additional columns for exam_attempts table
+        attempt_cols = {
+            "status": "VARCHAR(50) NOT NULL DEFAULT 'active'",
+            "violation_count": "INT NOT NULL DEFAULT 0",
+            "submitted_reason": "VARCHAR(500) NULL",
+            "submit_source": "VARCHAR(100) NULL",
+            "elapsed_seconds_at_submit": "INT NOT NULL DEFAULT 0",
+            "reopened_by_admin_id": "INT NULL",
+            "reopened_at": "DATETIME NULL",
+            "reopen_reason": "VARCHAR(500) NULL",
+            "reopen_count": "INT NOT NULL DEFAULT 0",
+            "last_activity_at": "DATETIME NULL",
+            "current_question_index": "INT NULL",
+            "time_extension_minutes": "INT NOT NULL DEFAULT 0"
+        }
+        for col, col_type in attempt_cols.items():
+            res = db.execute(text(f"SHOW COLUMNS FROM exam_attempts LIKE '{col}'")).fetchone()
+            if not res:
+                db.execute(text(f"ALTER TABLE exam_attempts ADD COLUMN {col} {col_type}"))
+                db.commit()
+                print(f"Migration: Column '{col}' added to exam_attempts table.")
+
+        # Additional columns for student_answers table
+        res = db.execute(text("SHOW COLUMNS FROM student_answers LIKE 'updated_at'")).fetchone()
+        if not res:
+            db.execute(text("ALTER TABLE student_answers ADD COLUMN updated_at DATETIME NULL"))
+            db.commit()
+            print("Migration: Column 'updated_at' added to student_answers table.")
+
     except Exception as e:
         print(f"Migration warning: {e}")
     finally:

@@ -79,6 +79,12 @@ const AdminDashboard = () => {
   const [leaderboardCommunity, setLeaderboardCommunity] = useState("All");
   const [showExcluded, setShowExcluded] = useState(true);
 
+  // Attempts & Reopen states
+  const [attemptSearchQuery, setAttemptSearchQuery] = useState("");
+  const [attemptSearchResults, setAttemptSearchResults] = useState(null);
+  const [reopenModal, setReopenModal] = useState({ show: false, attemptId: null, candidateName: "", reason: "", timeExtension: 0 });
+  const [forceSubmitModal, setForceSubmitModal] = useState({ show: false, attemptId: null, candidateName: "", reason: "" });
+
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [message, setMessage] = useState({ text: "", type: "" });
@@ -538,6 +544,62 @@ const AdminDashboard = () => {
     }
   };
 
+  const handleSearchAttempts = async () => {
+    if (!attemptSearchQuery.trim()) {
+      showMessage("Please enter a search query.", "danger");
+      return;
+    }
+    setActionLoading(true);
+    setAttemptSearchResults(null);
+    try {
+      const res = await api.get(`/api/v1/auth/attempts/search?query=${encodeURIComponent(attemptSearchQuery)}`);
+      setAttemptSearchResults(res.data);
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleReopenAttemptSubmit = async (e) => {
+    e.preventDefault();
+    if (!reopenModal.reason.trim()) {
+      showMessage("Please enter a reason for reopening.", "danger");
+      return;
+    }
+    setActionLoading(true);
+    try {
+      await api.post(`/api/v1/auth/attempts/${reopenModal.attemptId}/reopen`, {
+        reason: reopenModal.reason,
+        time_extension_minutes: parseInt(reopenModal.timeExtension) || 0
+      });
+      showMessage(`Attempt successfully reopened for candidate.`);
+      setReopenModal({ show: false, attemptId: null, candidateName: "", reason: "", timeExtension: 0 });
+      handleSearchAttempts();
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleForceSubmitAttemptSubmit = async (e) => {
+    e.preventDefault();
+    setActionLoading(true);
+    try {
+      await api.post(`/api/v1/auth/attempts/${forceSubmitModal.attemptId}/force-submit`, {
+        reason: forceSubmitModal.reason || "Force submitted by admin"
+      });
+      showMessage(`Attempt force-submitted successfully.`);
+      setForceSubmitModal({ show: false, attemptId: null, candidateName: "", reason: "" });
+      handleSearchAttempts();
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   // Trigger loading when tabs change
   useEffect(() => {
     if (activeTab === "overview") loadOverview();
@@ -620,6 +682,13 @@ const AdminDashboard = () => {
           >
             <Settings size={18} />
             Config Settings
+          </div>
+          <div 
+            className={`admin-menu-item ${activeTab === "attempts" ? "active" : ""}`}
+            onClick={() => setActiveTab("attempts")}
+          >
+            <Clock size={18} />
+            Exam Attempts & Reopen
           </div>
         </div>
 
@@ -1644,6 +1713,183 @@ const AdminDashboard = () => {
                 </div>
               </div>
             )}
+
+            {/* EXAM ATTEMPTS & REOPEN TAB */}
+            {activeTab === "attempts" && (
+              <div>
+                <div className="admin-header">
+                  <h1 className="admin-title">Exam Attempts & Reopen Management</h1>
+                </div>
+
+                <div className="glass-card" style={{ marginBottom: "1.5rem" }}>
+                  <h3 style={{ fontSize: "1.1rem", fontWeight: "700", marginBottom: "1rem", color: "var(--primary-dark)" }}>
+                    Search Candidate Attempt
+                  </h3>
+                  <div style={{ display: "flex", gap: "1rem" }}>
+                    <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
+                      <input
+                        type="text"
+                        className="form-control"
+                        placeholder="Enter Application Number or Mobile Number..."
+                        value={attemptSearchQuery}
+                        onChange={(e) => setAttemptSearchQuery(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") handleSearchAttempts(); }}
+                      />
+                    </div>
+                    <button 
+                      className="btn btn-primary" 
+                      onClick={handleSearchAttempts}
+                      disabled={actionLoading}
+                      style={{ width: "150px" }}
+                    >
+                      {actionLoading ? "Searching..." : "Search"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Search Results */}
+                {attemptSearchResults && (
+                  <div className="glass-card">
+                    <h3 style={{ fontSize: "1.1rem", fontWeight: "700", marginBottom: "1.2rem", color: "var(--primary-dark)" }}>
+                      Search Results ({attemptSearchResults.length})
+                    </h3>
+                    {attemptSearchResults.length === 0 ? (
+                      <p style={{ color: "var(--text-muted)", textAlign: "center", padding: "2rem" }}>
+                        No exam attempts or candidates found matching the query.
+                      </p>
+                    ) : (
+                      <div className="admin-table-card">
+                        <div className="admin-table-scroll">
+                          <table className="table">
+                            <thead>
+                              <tr>
+                                <th>Student Details</th>
+                                <th>Course Applications</th>
+                                <th>Attempt Status</th>
+                                <th style={{ textAlign: "center" }}>Progress</th>
+                                <th style={{ textAlign: "center" }}>Violations</th>
+                                <th>Last Active / Submitted</th>
+                                <th>Submission Info</th>
+                                <th style={{ textAlign: "center" }}>Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {attemptSearchResults.map((res) => {
+                                let badgeColor = "var(--text-muted)";
+                                let badgeBg = "#f1f5f9";
+                                const status = res.status;
+                                if (status === "active" || status === "admin_reopened") {
+                                  badgeColor = "#1e3a8a";
+                                  badgeBg = "#dbeafe";
+                                } else if (status === "submitted") {
+                                  badgeColor = "#166534";
+                                  badgeBg = "#dcfce7";
+                                } else if (status === "auto_submitted") {
+                                  badgeColor = "#991b1b";
+                                  badgeBg = "#fee2e2";
+                                } else if (status === "force_submitted") {
+                                  badgeColor = "#854d0e";
+                                  badgeBg = "#fef9c3";
+                                }
+
+                                return (
+                                  <tr key={res.candidate.id}>
+                                    <td>
+                                      <div style={{ fontWeight: "700" }}>{res.candidate.full_name}</div>
+                                      <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Mob: {res.candidate.mobile_number}</div>
+                                      <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Email: {res.candidate.email || "-"}</div>
+                                    </td>
+                                    <td>
+                                      {res.applications.map(app => (
+                                        <div key={app.application_number} style={{ fontSize: "0.85rem", marginBottom: "0.2rem" }}>
+                                          <span style={{ fontWeight: "700" }}>{app.course_code}</span>: {app.application_number} ({app.ug_marks ? `${app.ug_marks}%` : "Incomplete UG"})
+                                        </div>
+                                      ))}
+                                    </td>
+                                    <td>
+                                      <span style={{ 
+                                        fontSize: "0.8rem", 
+                                        fontWeight: "700", 
+                                        color: badgeColor, 
+                                        backgroundColor: badgeBg, 
+                                        padding: "0.25rem 0.6rem", 
+                                        borderRadius: "12px" 
+                                      }}>
+                                        {status}
+                                      </span>
+                                    </td>
+                                    <td style={{ textAlign: "center" }}>
+                                      {res.attempt_id ? (
+                                        <div>
+                                          <div style={{ fontWeight: "700" }}>{res.answered_count} / 100</div>
+                                          <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Score: {res.score !== null ? res.score : "-"}</div>
+                                        </div>
+                                      ) : "-"}
+                                    </td>
+                                    <td style={{ textAlign: "center", fontWeight: "700", color: res.violation_count > 0 ? "var(--danger)" : "var(--text)" }}>
+                                      {res.attempt_id ? res.violation_count : "-"}
+                                    </td>
+                                    <td>
+                                      {res.attempt_id ? (
+                                        <div style={{ fontSize: "0.85rem" }}>
+                                          <div>Active: {res.last_activity_at ? new Date(res.last_activity_at).toLocaleString() : "-"}</div>
+                                          <div>Submit: {res.submitted_at ? new Date(res.submitted_at).toLocaleString() : "-"}</div>
+                                        </div>
+                                      ) : "-"}
+                                    </td>
+                                    <td>
+                                      {res.attempt_id && (res.submit_source || res.submitted_reason) ? (
+                                        <div style={{ fontSize: "0.8rem", maxWidth: "200px", wordBreak: "break-word" }}>
+                                          <div>Source: <span style={{ fontWeight: "700" }}>{res.submit_source || "-"}</span></div>
+                                          <div>Reason: {res.submitted_reason || "-"}</div>
+                                          {res.reopen_count > 0 && <div style={{ color: "var(--primary)", fontWeight: "600" }}>Reopened: {res.reopen_count} time(s)</div>}
+                                        </div>
+                                      ) : "-"}
+                                    </td>
+                                    <td style={{ textAlign: "center" }}>
+                                      {res.attempt_id && (status === "submitted" || status === "auto_submitted" || status === "force_submitted") && (
+                                        <button 
+                                          className="btn btn-primary"
+                                          onClick={() => setReopenModal({ 
+                                            show: true, 
+                                            attemptId: res.attempt_id, 
+                                            candidateName: res.candidate.full_name, 
+                                            reason: "", 
+                                            timeExtension: 0 
+                                          })}
+                                          style={{ padding: "0.35rem 0.75rem", fontSize: "0.8rem", width: "auto" }}
+                                        >
+                                          Reopen Attempt
+                                        </button>
+                                      )}
+                                      {res.attempt_id && (status === "active" || status === "admin_reopened") && (
+                                        <button 
+                                          className="btn btn-secondary"
+                                          onClick={() => setForceSubmitModal({ 
+                                            show: true, 
+                                            attemptId: res.attempt_id, 
+                                            candidateName: res.candidate.full_name, 
+                                            reason: "" 
+                                          })}
+                                          style={{ padding: "0.35rem 0.75rem", fontSize: "0.8rem", width: "auto", backgroundColor: "#ef4444", color: "#fff", borderColor: "#ef4444" }}
+                                        >
+                                          Force Submit
+                                        </button>
+                                      )}
+                                      {!res.attempt_id && "-"}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>
@@ -1930,6 +2176,113 @@ const AdminDashboard = () => {
                   style={{ width: "130px" }}
                 >
                   {actionLoading ? "Saving..." : "Save Question"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Reopen Attempt Modal */}
+      {reopenModal.show && (
+        <div className="modal-backdrop">
+          <div className="modal-content animate-slide-up" style={{ maxWidth: "450px" }}>
+            <div className="modal-header">
+              <h2 className="modal-title">Reopen Exam Attempt</h2>
+            </div>
+            <form onSubmit={handleReopenAttemptSubmit}>
+              <div className="modal-body">
+                <p style={{ marginBottom: "1rem", fontWeight: "600" }}>
+                  Reopening exam session for: <span style={{ color: "var(--primary)" }}>{reopenModal.candidateName}</span>
+                </p>
+                <div className="alert alert-warning" style={{ fontSize: "0.85rem", marginBottom: "1rem" }}>
+                  <strong>⚠️ Warning:</strong> This will allow the candidate to continue from saved answers. Existing answers will not be deleted.
+                </div>
+                <div className="form-group" style={{ marginBottom: "1rem" }}>
+                  <label className="form-label">Reopen Reason (Required)</label>
+                  <textarea
+                    className="form-control"
+                    rows="3"
+                    placeholder="Enter reason (e.g., Accidental submit, power shutdown review...)"
+                    value={reopenModal.reason}
+                    onChange={(e) => setReopenModal({ ...reopenModal, reason: e.target.value })}
+                    required
+                  ></textarea>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Time Extension (Minutes - Optional)</label>
+                  <input
+                    className="form-control"
+                    type="number"
+                    min="0"
+                    placeholder="0"
+                    value={reopenModal.timeExtension}
+                    onChange={(e) => setReopenModal({ ...reopenModal, timeExtension: parseInt(e.target.value) || 0 })}
+                  />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setReopenModal({ show: false, attemptId: null, candidateName: "", reason: "", timeExtension: 0 })}
+                  style={{ width: "100px" }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={actionLoading}
+                  style={{ width: "150px" }}
+                >
+                  {actionLoading ? "Reopening..." : "Reopen Attempt"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Force Submit Attempt Modal */}
+      {forceSubmitModal.show && (
+        <div className="modal-backdrop">
+          <div className="modal-content animate-slide-up" style={{ maxWidth: "450px" }}>
+            <div className="modal-header">
+              <h2 className="modal-title" style={{ color: "#dc2626" }}>Force Submit Attempt</h2>
+            </div>
+            <form onSubmit={handleForceSubmitAttemptSubmit}>
+              <div className="modal-body">
+                <p style={{ marginBottom: "1.25rem", fontWeight: "600" }}>
+                  Force submit exam session for: <span style={{ color: "#dc2626" }}>{forceSubmitModal.candidateName}</span>
+                </p>
+                <div className="form-group">
+                  <label className="form-label">Submission Reason / Notes</label>
+                  <textarea
+                    className="form-control"
+                    rows="3"
+                    placeholder="Enter reason for force submission..."
+                    value={forceSubmitModal.reason}
+                    onChange={(e) => setForceSubmitModal({ ...forceSubmitModal, reason: e.target.value })}
+                  ></textarea>
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setForceSubmitModal({ show: false, attemptId: null, candidateName: "", reason: "" })}
+                  style={{ width: "100px" }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-danger"
+                  disabled={actionLoading}
+                  style={{ width: "150px", backgroundColor: "#dc2626", borderColor: "#dc2626" }}
+                >
+                  {actionLoading ? "Submitting..." : "Force Submit"}
                 </button>
               </div>
             </form>

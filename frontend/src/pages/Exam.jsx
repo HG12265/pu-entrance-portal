@@ -19,6 +19,12 @@ const Exam = () => {
   const [submitting, setSubmitting] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
+  // Autosave queue and status states
+  const [pendingSaves, setPendingSaves] = useState({});
+  const [saveStatus, setSaveStatus] = useState("Saved"); // Saved, Saving..., Connection lost. Retrying...
+  const pendingQueueRef = useRef({}); // { questionId: option }
+  const saveStatusRef = useRef("Saved");
+
   // ── Anti-cheat state ──────────────────────────────────────────────────────
   const [violations, setViolations] = useState(0);
   const [showWarning, setShowWarning] = useState(false);
@@ -49,7 +55,12 @@ const Exam = () => {
     try { document.exitFullscreen?.(); } catch (_) {}
     try {
       const aid = attemptIdRef.current || localStorage.getItem("attempt_id");
-      const response = await api.post("/api/v1/exams/submit", { attempt_id: aid });
+      const isViolation = reason.toLowerCase().includes("violation");
+      const response = await api.post("/api/v1/exams/submit", { 
+        attempt_id: parseInt(aid),
+        submit_source: isViolation ? "auto_tab_violation" : "time_over",
+        submitted_reason: reason || "Auto-submitted"
+      });
       localStorage.setItem("submit_result", JSON.stringify(response.data));
       localStorage.removeItem("attempt_id");
       localStorage.setItem("exam_status", "submitted");
@@ -68,18 +79,41 @@ const Exam = () => {
 
   // ── Violation handler ─────────────────────────────────────────────────────
 
-  const triggerViolation = useCallback((msg) => {
+  const triggerViolation = useCallback(async (msg) => {
     if (submittingRef.current) return;
-    violationsRef.current += 1;
-    const newCount = violationsRef.current;
-    setViolations(newCount);
+    try {
+      const aid = attemptIdRef.current || localStorage.getItem("attempt_id");
+      if (!aid) return;
+      const response = await api.post("/api/v1/exams/log-violation", {
+        attempt_id: parseInt(aid),
+        violation_message: msg
+      });
+      
+      const newCount = response.data.violation_count;
+      violationsRef.current = newCount;
+      setViolations(newCount);
 
-    if (newCount >= MAX_VIOLATIONS) {
-      setShowWarning(false);
-      handleAutoSubmit(`Exam auto-submitted due to repeated violations (${newCount})`);
-    } else {
-      setWarningMessage(msg);
-      setShowWarning(true);
+      if (newCount >= MAX_VIOLATIONS) {
+        setShowWarning(false);
+        handleAutoSubmit(`Exam auto-submitted due to repeated violations (${newCount})`);
+      } else {
+        setWarningMessage(msg);
+        setShowWarning(true);
+      }
+    } catch (err) {
+      console.error("Failed to log violation on backend:", err);
+      // Fallback local logic in case backend fails
+      violationsRef.current += 1;
+      const newCount = violationsRef.current;
+      setViolations(newCount);
+
+      if (newCount >= MAX_VIOLATIONS) {
+        setShowWarning(false);
+        handleAutoSubmit(`Exam auto-submitted due to repeated violations (${newCount})`);
+      } else {
+        setWarningMessage(msg);
+        setShowWarning(true);
+      }
     }
   }, [handleAutoSubmit]);
 
@@ -197,13 +231,24 @@ const Exam = () => {
     const initExam = async () => {
       try {
         const response = await api.post("/api/v1/exams/start", {});
-        const { attempt_id, exam_name, remaining_seconds, questions, answers } = response.data;
+        const { 
+          attempt_id, 
+          exam_name, 
+          remaining_seconds, 
+          questions, 
+          answers, 
+          current_question_index, 
+          violation_count 
+        } = response.data;
         setAttemptId(attempt_id);
         attemptIdRef.current = attempt_id;
         setExamName(exam_name);
         setTimeLeft(remaining_seconds);
         setQuestions(questions);
         setAnswers(answers || {});
+        setCurrentIdx(current_question_index || 0);
+        setViolations(violation_count || 0);
+        violationsRef.current = violation_count || 0;
         localStorage.setItem("attempt_id", attempt_id);
 
         // Enter fullscreen now that we have a user-gesture context (exam loaded)
@@ -231,6 +276,16 @@ const Exam = () => {
     };
   }, [navigate]);
 
+  // ── Sync current question index to backend ─────────────────────────────────
+  useEffect(() => {
+    if (attemptId && currentIdx !== null) {
+      api.post("/api/v1/exams/update-index", {
+        attempt_id: parseInt(attemptId),
+        current_question_index: currentIdx
+      }).catch(err => console.error("Failed to update current index:", err));
+    }
+  }, [currentIdx, attemptId]);
+
   // ── Countdown timer ───────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -249,13 +304,71 @@ const Exam = () => {
 
   // ── Manual submit ─────────────────────────────────────────────────────────
 
+  const processQueue = useCallback(async () => {
+    const keys = Object.keys(pendingQueueRef.current);
+    if (keys.length === 0) {
+      setSaveStatus("Saved");
+      saveStatusRef.current = "Saved";
+      return;
+    }
+
+    setSaveStatus("Saving...");
+    saveStatusRef.current = "Saving...";
+
+    const qId = keys[0];
+    const option = pendingQueueRef.current[qId];
+
+    try {
+      const aid = attemptIdRef.current || attemptId || localStorage.getItem("attempt_id");
+      await api.post("/api/v1/exams/save-answer", {
+        attempt_id: parseInt(aid),
+        question_id: parseInt(qId),
+        selected_option: option
+      });
+      // Success, remove from queue
+      delete pendingQueueRef.current[qId];
+      setPendingSaves({ ...pendingQueueRef.current });
+      // Trigger next
+      processQueue();
+    } catch (err) {
+      console.error("Save answer failed, will retry:", err);
+      setSaveStatus("Connection lost. Retrying...");
+      saveStatusRef.current = "Connection lost. Retrying...";
+      // Wait 3 seconds and retry
+      setTimeout(processQueue, 3000);
+    }
+  }, [attemptId]);
+
+  const handleSelectOption = useCallback((questionId, option) => {
+    // 1. Update UI state immediately
+    setAnswers((prev) => ({ ...prev, [questionId]: option }));
+
+    // 2. Queue the save
+    pendingQueueRef.current[questionId] = option;
+    setPendingSaves({ ...pendingQueueRef.current });
+
+    // 3. Start processing if not already saving
+    if (saveStatusRef.current !== "Saving..." && saveStatusRef.current !== "Connection lost. Retrying...") {
+      processQueue();
+    }
+  }, [processQueue]);
+
+  // ── Manual submit ─────────────────────────────────────────────────────────
+
   const handleSubmitExam = async () => {
+    if (Object.keys(pendingQueueRef.current).length > 0) {
+      alert("Please wait, saving your answers...");
+      return;
+    }
     setSubmitting(true);
     submittingRef.current = true;
     setShowConfirm(false);
     try { document.exitFullscreen?.(); } catch (_) {}
     try {
-      const response = await api.post("/api/v1/exams/submit", { attempt_id: attemptId });
+      const response = await api.post("/api/v1/exams/submit", { 
+        attempt_id: attemptId,
+        submit_source: "manual"
+      });
       localStorage.setItem("submit_result", JSON.stringify(response.data));
       localStorage.removeItem("attempt_id");
       localStorage.setItem("exam_status", "submitted");
@@ -265,22 +378,6 @@ const Exam = () => {
       console.error(err);
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  // ── Select option ─────────────────────────────────────────────────────────
-
-  const handleSelectOption = async (questionId, option) => {
-    const updatedAnswers = { ...answers, [questionId]: option };
-    setAnswers(updatedAnswers);
-    try {
-      await api.post("/api/v1/exams/save-answer", {
-        attempt_id: attemptId,
-        question_id: questionId,
-        selected_option: option,
-      });
-    } catch (err) {
-      console.error("Failed to auto-save answer:", err);
     }
   };
 
@@ -556,6 +653,35 @@ const Exam = () => {
 
       {/* ── Sidebar Section ── */}
       <div className="exam-sidebar">
+        {/* Autosave status banner */}
+        <div className="autosave-status-box" style={{
+          background: saveStatus === "Saved" ? "#f0fdf4" : saveStatus === "Saving..." ? "#fffbeb" : "#fef2f2",
+          border: saveStatus === "Saved" ? "1px solid #bbf7d0" : saveStatus === "Saving..." ? "1px solid #fde047" : "1px solid #fca5a5",
+          borderRadius: "10px",
+          padding: "0.6rem 0.75rem",
+          marginBottom: "1rem",
+          textAlign: "center",
+          color: saveStatus === "Saved" ? "#166534" : saveStatus === "Saving..." ? "#854d0e" : "#dc2626",
+          fontWeight: "700",
+          fontSize: "0.85rem",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: "0.5rem"
+        }}>
+          <span style={{
+            width: "8px",
+            height: "8px",
+            borderRadius: "50%",
+            backgroundColor: saveStatus === "Saved" ? "#22c55e" : saveStatus === "Saving..." ? "#eab308" : "#ef4444",
+            display: "inline-block"
+          }}></span>
+          <span>{saveStatus}</span>
+          {Object.keys(pendingSaves).length > 0 && (
+            <span style={{ fontSize: "0.75rem", opacity: 0.8 }}>({Object.keys(pendingSaves).length} pending)</span>
+          )}
+        </div>
+
         {/* Timer */}
         <div className="timer-box">
           <div className="timer-title">Time Remaining</div>
@@ -673,13 +799,10 @@ const Exam = () => {
               <h3 className="modal-title">Submit Examination</h3>
             </div>
             <div className="modal-body">
-              <p style={{ marginBottom: "1rem", fontWeight: "500" }}>Are you sure you want to end your examination?</p>
-              <ul style={{ paddingLeft: "1.25rem", color: "var(--text-muted)", fontSize: "0.9rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                <li>Total Questions: {questions.length}</li>
-                <li>Answered: {answeredCount}</li>
-                <li>Remaining: {questions.length - answeredCount}</li>
-              </ul>
-              <p style={{ marginTop: "1.25rem", color: "var(--danger)", fontSize: "0.85rem", fontWeight: "600" }}>
+              <p style={{ marginBottom: "1rem", fontWeight: "600", color: "var(--text)" }}>
+                You have answered {answeredCount} out of {questions.length} questions. {questions.length - answeredCount} questions are unanswered. Are you sure you want to submit?
+              </p>
+              <p style={{ marginTop: "1.25rem", color: "var(--danger)", fontSize: "0.85rem", fontWeight: "700" }}>
                 Warning: Once submitted, you cannot re-enter or change your options!
               </p>
             </div>

@@ -213,6 +213,20 @@ class ExamAttempt(Base):
     is_disqualified = Column(Boolean, default=False, server_default="0")
     question_order_json = Column(Text, nullable=True)
 
+    # New exam resume, violation, and reopen fields
+    status = Column(String(50), nullable=False, default="active")  # active, submitted, auto_submitted, admin_reopened, force_submitted
+    violation_count = Column(Integer, nullable=False, default=0)
+    submitted_reason = Column(String(500), nullable=True)
+    submit_source = Column(String(100), nullable=True)  # manual, auto_tab_violation, time_over, admin_force
+    elapsed_seconds_at_submit = Column(Integer, nullable=False, default=0)
+    reopened_by_admin_id = Column(Integer, ForeignKey("admins.id", ondelete="SET NULL"), nullable=True)
+    reopened_at = Column(DateTime, nullable=True)
+    reopen_reason = Column(String(500), nullable=True)
+    reopen_count = Column(Integer, nullable=False, default=0)
+    last_activity_at = Column(DateTime, nullable=True)
+    current_question_index = Column(Integer, nullable=True)
+    time_extension_minutes = Column(Integer, nullable=False, default=0)
+
     # Constraints
     __table_args__ = (
         UniqueConstraint('candidate_id', 'exam_id', name='_candidate_exam_attempt_uc'),
@@ -222,6 +236,7 @@ class ExamAttempt(Base):
     candidate = relationship("Candidate", back_populates="attempts")
     exam = relationship("Exam", back_populates="attempts")
     answers = relationship("StudentAnswer", back_populates="attempt", cascade="all, delete-orphan")
+    reopened_by_admin = relationship("Admin", foreign_keys=[reopened_by_admin_id])
 
 class StudentAnswer(Base):
     __tablename__ = "student_answers"
@@ -232,6 +247,7 @@ class StudentAnswer(Base):
     selected_option = Column(String(10), nullable=True)  # A, B, C, D, or None
     is_correct = Column(Boolean, nullable=True)
     marks_obtained = Column(Float, default=0.0)
+    updated_at = Column(DateTime, nullable=True, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
     # Relationships
     attempt = relationship("ExamAttempt", back_populates="answers")
@@ -240,3 +256,19 @@ class StudentAnswer(Base):
     __table_args__ = (
         UniqueConstraint('attempt_id', 'question_id', name='_attempt_question_uc'),
     )
+
+class ExamAttemptEventLog(Base):
+    __tablename__ = "exam_attempt_event_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    attempt_id = Column(Integer, ForeignKey("exam_attempts.id", ondelete="CASCADE"), nullable=False)
+    candidate_id = Column(Integer, ForeignKey("candidates.id", ondelete="CASCADE"), nullable=False)
+    event_type = Column(String(50), nullable=False)  # answer_saved, tab_violation, auto_submitted, manual_submitted, admin_reopened, resumed, heartbeat
+    event_message = Column(String(500), nullable=False)
+    metadata_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    # Relationships
+    attempt = relationship("ExamAttempt")
+    candidate = relationship("Candidate")
+
