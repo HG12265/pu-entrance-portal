@@ -1139,3 +1139,74 @@ body {
   overflow-y: auto;
 }
 
+/* Wide Admin Dashboard Tables Scrolling UX & Sticky Headers */
+.admin-dashboard-page, .admin-layout {
+  overflow-x: hidden;
+}
+
+.admin-table-card {
+  width: 100%;
+  overflow: hidden;
+}
+
+.admin-table-scroll {
+  width: 100%;
+  max-height: calc(100vh - 330px);
+  overflow-x: auto;
+  overflow-y: auto;
+  border-radius: 14px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+}
+
+.admin-table-scroll table {
+  width: max-content;
+  min-width: 1200px;
+  border-collapse: collapse;
+}
+
+.admin-table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #f8fafc;
+}
+
+.admin-table-scroll::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+.admin-table-scroll::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 999px;
+}
+
+.admin-table-scroll::-webkit-scrollbar-track {
+  background: #e2e8f0;
+}
+
+.applications-table-scroll {
+  max-height: calc(100vh - 360px);
+}
+
+.applications-table-scroll table {
+  min-width: 1300px;
+}
+
+.questions-table-scroll {
+  max-height: calc(100vh - 360px);
+}
+
+.questions-table-scroll table {
+  min-width: 1300px;
+}
+
+.counselling-table-scroll {
+  max-height: calc(100vh - 380px);
+}
+
+.counselling-table-scroll table {
+  min-width: 1900px;
+}
+

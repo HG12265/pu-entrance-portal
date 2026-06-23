@@ -980,46 +980,48 @@ const AdminDashboard = () => {
                   );
                 })()}
 
-                <div className="table-container">
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>Application No</th>
-                        <th>Student Name</th>
-                        <th>Course</th>
-                        <th>Mobile</th>
-                        <th>Community</th>
-                        <th>Email</th>
-                        <th style={{ textAlign: "right" }}>UG %</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredApps.map((app) => (
-                        <tr key={app.id}>
-                          <td style={{ fontWeight: "700", color: "var(--primary)" }}>{app.application_number}</td>
-                          <td style={{ fontWeight: "600" }}>{app.full_name}</td>
-                          <td>
-                            <span className="badge badge-blue">
-                              {app.course_code || (app.course_id === 1 ? "MCA" : app.course_id === 2 ? "MSC_CS" : app.course_id === 3 ? "MSC_DS" : `ID: ${app.course_id}`)}
-                            </span>
-                          </td>
-                          <td>{app.mobile_number}</td>
-                          <td>{app.community || "OC"}</td>
-                          <td>{app.email || "-"}</td>
-                          <td style={{ textAlign: "right", fontWeight: "600" }}>
-                            {app.ug_marks !== null ? `${app.ug_marks}%` : "N/A"}
-                          </td>
-                        </tr>
-                      ))}
-                      {filteredApps.length === 0 && (
+                <div className="admin-table-card">
+                  <div className="admin-table-scroll applications-table-scroll">
+                    <table className="table">
+                      <thead>
                         <tr>
-                          <td colSpan="7" style={{ textAlign: "center", color: "var(--text-muted)", padding: "2rem" }}>
-                            No applications matching filter search criteria.
-                          </td>
+                          <th>Application No</th>
+                          <th>Student Name</th>
+                          <th>Course</th>
+                          <th>Mobile</th>
+                          <th>Community</th>
+                          <th>Email</th>
+                          <th style={{ textAlign: "right" }}>UG %</th>
                         </tr>
-                      )}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {filteredApps.map((app) => (
+                          <tr key={app.id}>
+                            <td style={{ fontWeight: "700", color: "var(--primary)" }}>{app.application_number}</td>
+                            <td style={{ fontWeight: "600" }}>{app.full_name}</td>
+                            <td>
+                              <span className="badge badge-blue">
+                                {app.course_code || (app.course_id === 1 ? "MCA" : app.course_id === 2 ? "MSC_CS" : app.course_id === 3 ? "MSC_DS" : `ID: ${app.course_id}`)}
+                              </span>
+                            </td>
+                            <td>{app.mobile_number}</td>
+                            <td>{app.community || "OC"}</td>
+                            <td>{app.email || "-"}</td>
+                            <td style={{ textAlign: "right", fontWeight: "600" }}>
+                              {app.ug_marks !== null ? `${app.ug_marks}%` : "N/A"}
+                            </td>
+                          </tr>
+                        ))}
+                        {filteredApps.length === 0 && (
+                          <tr>
+                            <td colSpan="7" style={{ textAlign: "center", color: "var(--text-muted)", padding: "2rem" }}>
+                              No applications matching filter search criteria.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
             )}
@@ -1124,83 +1126,85 @@ const AdminDashboard = () => {
                   </div>
                 </div>
 
-                <div className="table-container">
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th style={{ width: "80px" }}>Part</th>
-                        <th style={{ width: "80px" }}>S. No</th>
-                        <th style={{ width: "35%" }}>Question</th>
-                        <th>Options (A, B, C, D)</th>
-                        <th>Correct</th>
-                        <th style={{ textAlign: "right" }}>Mark</th>
-                        <th style={{ width: "100px", textAlign: "center" }}>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {questions
-                        .filter((q) => questionPartFilter === "All" || q.part_code === questionPartFilter)
-                        .map((q) => (
-                          <tr key={q.id}>
-                            <td style={{ fontWeight: "700", color: "var(--primary)" }}>{q.part_code ? `Part ${q.part_code}` : "-"}</td>
-                            <td style={{ fontWeight: "600" }}>{q.source_s_no !== null && q.source_s_no !== undefined ? q.source_s_no : "-"}</td>
-                            <td style={{ fontWeight: "500", verticalAlign: "top" }}>
-                              <div>{q.question_text}</div>
-                              {q.image_url && (
-                                <div style={{ marginTop: "0.5rem" }}>
-                                  <img 
-                                    src={q.image_url} 
-                                    alt="Question diagram" 
-                                    style={{ maxWidth: "150px", maxHeight: "80px", borderRadius: "4px", border: "1px solid var(--border)" }} 
-                                  />
-                                </div>
-                              )}
-                            </td>
-                            <td style={{ fontSize: "0.85rem", color: "var(--text-secondary)", verticalAlign: "top" }}>
-                              <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-                                {[
-                                  { label: "A", val: q.option_a, img: q.option_a_image_url },
-                                  { label: "B", val: q.option_b, img: q.option_b_image_url },
-                                  { label: "C", val: q.option_c, img: q.option_c_image_url },
-                                  { label: "D", val: q.option_d, img: q.option_d_image_url },
-                                ].map((opt) => (
-                                  <div key={opt.label} style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-                                    <span style={{ fontWeight: "600" }}>{opt.label}:</span>
-                                    {opt.val && <span>{opt.val}</span>}
-                                    {opt.img && (
-                                      <img 
-                                        src={opt.img} 
-                                        alt={`Opt ${opt.label}`} 
-                                        style={{ height: "28px", objectFit: "contain", borderRadius: "2px", border: "1px solid var(--border)" }} 
-                                      />
-                                    )}
+                <div className="admin-table-card">
+                  <div className="admin-table-scroll questions-table-scroll">
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: "80px" }}>Part</th>
+                          <th style={{ width: "80px" }}>S. No</th>
+                          <th style={{ width: "35%" }}>Question</th>
+                          <th>Options (A, B, C, D)</th>
+                          <th>Correct</th>
+                          <th style={{ textAlign: "right" }}>Mark</th>
+                          <th style={{ width: "100px", textAlign: "center" }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {questions
+                          .filter((q) => questionPartFilter === "All" || q.part_code === questionPartFilter)
+                          .map((q) => (
+                            <tr key={q.id}>
+                              <td style={{ fontWeight: "700", color: "var(--primary)" }}>{q.part_code ? `Part ${q.part_code}` : "-"}</td>
+                              <td style={{ fontWeight: "600" }}>{q.source_s_no !== null && q.source_s_no !== undefined ? q.source_s_no : "-"}</td>
+                              <td style={{ fontWeight: "500", verticalAlign: "top" }}>
+                                <div>{q.question_text}</div>
+                                {q.image_url && (
+                                  <div style={{ marginTop: "0.5rem" }}>
+                                    <img 
+                                      src={q.image_url} 
+                                      alt="Question diagram" 
+                                      style={{ maxWidth: "150px", maxHeight: "80px", borderRadius: "4px", border: "1px solid var(--border)" }} 
+                                    />
                                   </div>
-                                ))}
-                              </div>
-                            </td>
-                            <td><span className="badge badge-blue">{q.correct_option}</span></td>
-                            <td style={{ textAlign: "right", fontWeight: "600" }}>{q.marks}</td>
-                            <td style={{ textAlign: "center" }}>
-                              <div style={{ display: "flex", gap: "0.25rem", justifyContent: "center" }}>
-                                <button className="action-btn edit" onClick={() => handleOpenEditQuestion(q)}>
-                                  <Edit size={16} />
-                                </button>
-                                <button className="action-btn delete" onClick={() => handleDeleteQuestion(q.id)}>
-                                  <Trash2 size={16} />
-                                </button>
-                              </div>
+                                )}
+                              </td>
+                              <td style={{ fontSize: "0.85rem", color: "var(--text-secondary)", verticalAlign: "top" }}>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                                  {[
+                                    { label: "A", val: q.option_a, img: q.option_a_image_url },
+                                    { label: "B", val: q.option_b, img: q.option_b_image_url },
+                                    { label: "C", val: q.option_c, img: q.option_c_image_url },
+                                    { label: "D", val: q.option_d, img: q.option_d_image_url },
+                                  ].map((opt) => (
+                                    <div key={opt.label} style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                                      <span style={{ fontWeight: "600" }}>{opt.label}:</span>
+                                      {opt.val && <span>{opt.val}</span>}
+                                      {opt.img && (
+                                        <img 
+                                          src={opt.img} 
+                                          alt={`Opt ${opt.label}`} 
+                                          style={{ height: "28px", objectFit: "contain", borderRadius: "2px", border: "1px solid var(--border)" }} 
+                                        />
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </td>
+                              <td><span className="badge badge-blue">{q.correct_option}</span></td>
+                              <td style={{ textAlign: "right", fontWeight: "600" }}>{q.marks}</td>
+                              <td style={{ textAlign: "center" }}>
+                                <div style={{ display: "flex", gap: "0.25rem", justifyContent: "center" }}>
+                                  <button className="action-btn edit" onClick={() => handleOpenEditQuestion(q)}>
+                                    <Edit size={16} />
+                                  </button>
+                                  <button className="action-btn delete" onClick={() => handleDeleteQuestion(q.id)}>
+                                    <Trash2 size={16} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        {questions.filter((q) => questionPartFilter === "All" || q.part_code === questionPartFilter).length === 0 && (
+                          <tr>
+                            <td colSpan="7" style={{ textAlign: "center", color: "var(--text-muted)" }}>
+                              No questions uploaded yet. Start adding manually or upload Excel sheet.
                             </td>
                           </tr>
-                        ))}
-                      {questions.filter((q) => questionPartFilter === "All" || q.part_code === questionPartFilter).length === 0 && (
-                        <tr>
-                          <td colSpan="7" style={{ textAlign: "center", color: "var(--text-muted)" }}>
-                            No questions uploaded yet. Start adding manually or upload Excel sheet.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
             )}
@@ -1298,129 +1302,131 @@ const AdminDashboard = () => {
                   </label>
                 </div>
 
-                <div className="table-container">
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th style={{ width: "70px" }}>Orig Rank</th>
-                        <th style={{ width: "70px" }}>Active Rank</th>
-                        <th style={{ width: "70px" }}>Comm Rank</th>
-                        <th>Application No</th>
-                        <th>Student Name</th>
-                        <th>Community (Raw)</th>
-                        <th>Community (Norm)</th>
-                        <th style={{ textAlign: "right" }}>Quota Seats</th>
-                        <th>Selection Bucket</th>
-                        <th style={{ textAlign: "right" }}>Entrance Score</th>
-                        <th style={{ textAlign: "right" }}>UG %</th>
-                        <th style={{ textAlign: "right" }}>Entrance 50%</th>
-                        <th style={{ textAlign: "right" }}>UG 50%</th>
-                        <th style={{ textAlign: "right" }}>Final Score</th>
-                        <th>Counselling Status</th>
-                        <th style={{ textAlign: "center", width: "180px" }}>Admission Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {leaderboard.map((r) => {
-                        let badgeColor = "var(--text-muted)";
-                        let badgeBg = "#f1f5f9";
-                        if (r.confirmation_status === "Confirmed") {
-                          badgeColor = "#166534";
-                          badgeBg = "#dcfce7";
-                        } else if (r.confirmation_status === "Eligible") {
-                          badgeColor = "#1e3a8a";
-                          badgeBg = "#dbeafe";
-                        } else if (r.confirmation_status === "Waitlisted") {
-                          badgeColor = "#854d0e";
-                          badgeBg = "#fef9c3";
-                        } else if (r.confirmation_status === "Excluded") {
-                          badgeColor = "#991b1b";
-                          badgeBg = "#fee2e2";
-                        } else if (r.confirmation_status === "Incomplete UG Percentage") {
-                          badgeColor = "#c2410c";
-                          badgeBg = "#ffedd5";
-                        }
+                <div className="admin-table-card">
+                  <div className="admin-table-scroll counselling-table-scroll">
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: "70px" }}>Orig Rank</th>
+                          <th style={{ width: "70px" }}>Active Rank</th>
+                          <th style={{ width: "70px" }}>Comm Rank</th>
+                          <th>Application No</th>
+                          <th>Student Name</th>
+                          <th>Community (Raw)</th>
+                          <th>Community (Norm)</th>
+                          <th style={{ textAlign: "right" }}>Quota Seats</th>
+                          <th>Selection Bucket</th>
+                          <th style={{ textAlign: "right" }}>Entrance Score</th>
+                          <th style={{ textAlign: "right" }}>UG %</th>
+                          <th style={{ textAlign: "right" }}>Entrance 50%</th>
+                          <th style={{ textAlign: "right" }}>UG 50%</th>
+                          <th style={{ textAlign: "right" }}>Final Score</th>
+                          <th>Counselling Status</th>
+                          <th style={{ textAlign: "center", width: "180px" }}>Admission Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {leaderboard.map((r) => {
+                          let badgeColor = "var(--text-muted)";
+                          let badgeBg = "#f1f5f9";
+                          if (r.confirmation_status === "Confirmed") {
+                            badgeColor = "#166534";
+                            badgeBg = "#dcfce7";
+                          } else if (r.confirmation_status === "Eligible") {
+                            badgeColor = "#1e3a8a";
+                            badgeBg = "#dbeafe";
+                          } else if (r.confirmation_status === "Waitlisted") {
+                            badgeColor = "#854d0e";
+                            badgeBg = "#fef9c3";
+                          } else if (r.confirmation_status === "Excluded") {
+                            badgeColor = "#991b1b";
+                            badgeBg = "#fee2e2";
+                          } else if (r.confirmation_status === "Incomplete UG Percentage") {
+                            badgeColor = "#c2410c";
+                            badgeBg = "#ffedd5";
+                          }
 
-                        return (
-                          <tr key={r.application_number} style={{ opacity: r.confirmation_status === "Excluded" ? 0.65 : 1 }}>
-                            <td style={{ textAlign: "center", fontWeight: "600" }}>{r.original_rank}</td>
-                            <td style={{ textAlign: "center", fontWeight: "700", color: "var(--primary-dark)" }}>
-                              {r.active_rank === -1 ? "-" : r.active_rank}
-                            </td>
-                            <td style={{ textAlign: "center", fontWeight: "600" }}>
-                              {r.community_rank === -1 ? "-" : r.community_rank}
-                            </td>
-                            <td style={{ fontWeight: "700", color: "var(--primary)" }}>{r.application_number}</td>
-                            <td style={{ fontWeight: "600" }}>
-                              {r.student_name}
-                              {r.excluded_reason && (
-                                <div style={{ fontSize: "0.75rem", color: "#b91c1c", fontWeight: "500", marginTop: "0.15rem" }}>
-                                  ({r.excluded_reason})
-                                </div>
-                              )}
-                            </td>
-                            <td>{r.community}</td>
-                            <td style={{ fontWeight: "600" }}>{r.normalized_community}</td>
-                            <td style={{ textAlign: "right", fontWeight: "600" }}>{r.community_seat_count}</td>
-                            <td style={{ fontWeight: "700", color: "var(--primary-dark)" }}>{r.final_selection_bucket_name || "-"}</td>
-                            <td style={{ textAlign: "right", fontWeight: "700" }}>{r.score}</td>
-                            <td style={{ textAlign: "right" }}>
-                              {r.ug_percentage !== null && r.ug_percentage !== undefined ? `${r.ug_percentage}%` : "Incomplete"}
-                            </td>
-                            <td style={{ textAlign: "right" }}>
-                              {r.entrance_weighted_score !== null && r.entrance_weighted_score !== undefined ? r.entrance_weighted_score : "-"}
-                            </td>
-                            <td style={{ textAlign: "right" }}>
-                              {r.ug_weighted_score !== null && r.ug_weighted_score !== undefined ? r.ug_weighted_score : "-"}
-                            </td>
-                            <td style={{ textAlign: "right", fontWeight: "800", color: "var(--primary-dark)" }}>
-                              {r.final_score !== null && r.final_score !== undefined ? r.final_score : "Incomplete"}
-                            </td>
-                            <td>
-                              <span style={{ 
-                                fontSize: "0.8rem", 
-                                fontWeight: "700", 
-                                color: badgeColor, 
-                                backgroundColor: badgeBg, 
-                                padding: "0.25rem 0.6rem", 
-                                borderRadius: "12px" 
-                              }}>
-                                {r.confirmation_status}
-                              </span>
-                            </td>
-                            <td style={{ textAlign: "center" }}>
-                              {r.confirmation_status === "Confirmed" ? (
-                                <button 
-                                  className="btn btn-secondary" 
-                                  onClick={() => handleCancelAdmission(r.candidate_id, courses.find(c => c.code === leaderboardDegree)?.id)}
-                                  disabled={actionLoading}
-                                  style={{ padding: "0.35rem 0.75rem", fontSize: "0.8rem", backgroundColor: "#ef4444", color: "#fff", borderColor: "#ef4444" }}
-                                >
-                                  Cancel Admission
-                                </button>
-                              ) : (
-                                <button 
-                                  className="btn btn-primary"
-                                  onClick={() => handleConfirmAdmission(r.candidate_id, courses.find(c => c.code === leaderboardDegree)?.id)}
-                                  disabled={actionLoading || r.confirmation_status === "Excluded" || r.confirmation_status === "Incomplete UG Percentage"}
-                                  style={{ padding: "0.35rem 0.75rem", fontSize: "0.8rem" }}
-                                >
-                                  Confirm Admission
-                                </button>
-                              )}
+                          return (
+                            <tr key={r.application_number} style={{ opacity: r.confirmation_status === "Excluded" ? 0.65 : 1 }}>
+                              <td style={{ textAlign: "center", fontWeight: "600" }}>{r.original_rank}</td>
+                              <td style={{ textAlign: "center", fontWeight: "700", color: "var(--primary-dark)" }}>
+                                {r.active_rank === -1 ? "-" : r.active_rank}
+                              </td>
+                              <td style={{ textAlign: "center", fontWeight: "600" }}>
+                                {r.community_rank === -1 ? "-" : r.community_rank}
+                              </td>
+                              <td style={{ fontWeight: "700", color: "var(--primary)" }}>{r.application_number}</td>
+                              <td style={{ fontWeight: "600" }}>
+                                {r.student_name}
+                                {r.excluded_reason && (
+                                  <div style={{ fontSize: "0.75rem", color: "#b91c1c", fontWeight: "500", marginTop: "0.15rem" }}>
+                                    ({r.excluded_reason})
+                                  </div>
+                                )}
+                              </td>
+                              <td>{r.community}</td>
+                              <td style={{ fontWeight: "600" }}>{r.normalized_community}</td>
+                              <td style={{ textAlign: "right", fontWeight: "600" }}>{r.community_seat_count}</td>
+                              <td style={{ fontWeight: "700", color: "var(--primary-dark)" }}>{r.final_selection_bucket_name || "-"}</td>
+                              <td style={{ textAlign: "right", fontWeight: "700" }}>{r.score}</td>
+                              <td style={{ textAlign: "right" }}>
+                                {r.ug_percentage !== null && r.ug_percentage !== undefined ? `${r.ug_percentage}%` : "Incomplete"}
+                              </td>
+                              <td style={{ textAlign: "right" }}>
+                                {r.entrance_weighted_score !== null && r.entrance_weighted_score !== undefined ? r.entrance_weighted_score : "-"}
+                              </td>
+                              <td style={{ textAlign: "right" }}>
+                                {r.ug_weighted_score !== null && r.ug_weighted_score !== undefined ? r.ug_weighted_score : "-"}
+                              </td>
+                              <td style={{ textAlign: "right", fontWeight: "800", color: "var(--primary-dark)" }}>
+                                {r.final_score !== null && r.final_score !== undefined ? r.final_score : "Incomplete"}
+                              </td>
+                              <td>
+                                <span style={{ 
+                                  fontSize: "0.8rem", 
+                                  fontWeight: "700", 
+                                  color: badgeColor, 
+                                  backgroundColor: badgeBg, 
+                                  padding: "0.25rem 0.6rem", 
+                                  borderRadius: "12px" 
+                                }}>
+                                  {r.confirmation_status}
+                                </span>
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                {r.confirmation_status === "Confirmed" ? (
+                                  <button 
+                                    className="btn btn-secondary" 
+                                    onClick={() => handleCancelAdmission(r.candidate_id, courses.find(c => c.code === leaderboardDegree)?.id)}
+                                    disabled={actionLoading}
+                                    style={{ padding: "0.35rem 0.75rem", fontSize: "0.8rem", backgroundColor: "#ef4444", color: "#fff", borderColor: "#ef4444" }}
+                                  >
+                                    Cancel Admission
+                                  </button>
+                                ) : (
+                                  <button 
+                                    className="btn btn-primary"
+                                    onClick={() => handleConfirmAdmission(r.candidate_id, courses.find(c => c.code === leaderboardDegree)?.id)}
+                                    disabled={actionLoading || r.confirmation_status === "Excluded" || r.confirmation_status === "Incomplete UG Percentage"}
+                                    style={{ padding: "0.35rem 0.75rem", fontSize: "0.8rem" }}
+                                  >
+                                    Confirm Admission
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {leaderboard.length === 0 && (
+                          <tr>
+                            <td colSpan="16" style={{ textAlign: "center", color: "var(--text-muted)", padding: "2rem" }}>
+                              No rankings or counselling profiles found.
                             </td>
                           </tr>
-                        );
-                      })}
-                      {leaderboard.length === 0 && (
-                        <tr>
-                          <td colSpan="16" style={{ textAlign: "center", color: "var(--text-muted)", padding: "2rem" }}>
-                            No rankings or counselling profiles found.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
             )}
