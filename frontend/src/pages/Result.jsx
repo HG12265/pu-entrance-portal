@@ -148,7 +148,7 @@ const Result = () => {
                   </div>
                 </div>
 
-                <div className="results-stats-grid" style={{ gridTemplateColumns: "repeat(5, 1fr)", gap: "0.5rem" }}>
+                <div className="results-stats-grid" style={{ gridTemplateColumns: "repeat(6, 1fr)", gap: "0.5rem" }}>
                   <div className="result-stat-card" style={{ padding: "0.75rem 0.25rem" }}>
                     <div className="result-stat-val" style={{ fontSize: "1.2rem" }}>{result.total_questions}</div>
                     <div className="result-stat-lbl" style={{ fontSize: "0.75rem" }}>Total Qns</div>
@@ -164,6 +164,12 @@ const Result = () => {
                   <div className="result-stat-card" style={{ padding: "0.75rem 0.25rem" }}>
                     <div className="result-stat-val" style={{ fontSize: "1.2rem", color: "var(--danger)" }}>{result.wrong_answers}</div>
                     <div className="result-stat-lbl" style={{ fontSize: "0.75rem" }}>Wrong</div>
+                  </div>
+                  <div className="result-stat-card" style={{ padding: "0.75rem 0.25rem" }}>
+                    <div className="result-stat-val" style={{ fontSize: "1.2rem", color: "#d97706" }}>
+                      {result.unanswered_questions !== undefined ? result.unanswered_questions : (result.total_questions - result.attempted_questions)}
+                    </div>
+                    <div className="result-stat-lbl" style={{ fontSize: "0.75rem" }}>Unanswered</div>
                   </div>
                   <div className="result-stat-card" style={{ padding: "0.75rem 0.25rem" }}>
                     <div className="result-stat-val" style={{ fontSize: "1.2rem" }}>{result.percentage}%</div>

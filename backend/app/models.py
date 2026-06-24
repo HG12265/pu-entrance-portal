@@ -163,6 +163,10 @@ class Exam(Base):
     start_date = Column(DateTime, nullable=False)
     end_date = Column(DateTime, nullable=False)
     result_visibility = Column(Boolean, default=True)
+    start_at_utc = Column(DateTime, nullable=True)
+    end_at_utc = Column(DateTime, nullable=True)
+    timezone = Column(String(100), nullable=False, default="Asia/Kolkata")
+    schedule_mode = Column(String(50), nullable=False, default="FIXED_WINDOW")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     # Relationships

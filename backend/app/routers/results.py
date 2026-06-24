@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.database import get_db
-from app.models import ExamAttempt, StudentApplication, Candidate, Course, Admin, Exam, Question
+from app.models import ExamAttempt, StudentApplication, Candidate, Course, Admin, Exam, Question, StudentAnswer
 from app.schemas import CourseRankingEntry
 from app.auth import get_current_admin, get_current_candidate
 from app.utils.community import normalize_community, get_community_display
@@ -479,6 +479,18 @@ def get_my_results(
         ug_weighted_score = ug_percentage * 0.5 if ug_percentage is not None else None
         final_score = round(entrance_weighted_score + ug_weighted_score, 2) if ug_weighted_score is not None else None
 
+    # Count answered questions present in final_order
+    answered_count = 0
+    if attempt.question_order_json:
+        try:
+            import json
+            order_json = json.loads(attempt.question_order_json)
+            final_order = order_json.get("final_order", [])
+            saved_answers = db.query(StudentAnswer).filter(StudentAnswer.attempt_id == attempt.id).all()
+            answered_count = sum(1 for ans in saved_answers if ans.selected_option is not None and ans.selected_option != "" and ans.question_id in final_order)
+        except Exception as e:
+            print(f"Error parsing order json in my-results: {e}")
+
     return {
         "has_results": True,
         "result_visibility": result_visibility,
@@ -486,7 +498,8 @@ def get_my_results(
         "mobile_number": current_candidate.mobile_number,
         "attempt_id": attempt.id,
         "total_questions": attempt.total_questions,
-        "attempted_questions": attempt.total_questions, # completed
+        "attempted_questions": answered_count,
+        "unanswered_questions": max(0, attempt.total_questions - answered_count),
         "correct_answers": attempt.correct_answers,
         "wrong_answers": attempt.wrong_answers,
         "score": attempt.score,

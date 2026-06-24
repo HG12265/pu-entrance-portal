@@ -14,35 +14,90 @@ router = APIRouter(prefix="/api/v1/exams", tags=["Exams"])
 
 def get_main_exam(db: Session) -> Exam:
     exam = db.query(Exam).first()
+    import datetime as dt_mod
+    start_utc = dt_mod.datetime(2026, 6, 29, 5, 0, 0)
+    end_utc = dt_mod.datetime(2026, 6, 29, 7, 0, 0)
+    
     if not exam:
         exam = Exam(
             name="Periyar University Entrance Examination 2026",
             total_questions=100,
             duration_minutes=120,
-            start_date=datetime.datetime.utcnow(),
-            end_date=datetime.datetime.utcnow() + datetime.timedelta(days=30),
+            start_date=start_utc,
+            end_date=end_utc,
+            start_at_utc=start_utc,
+            end_at_utc=end_utc,
+            timezone="Asia/Kolkata",
+            schedule_mode="FIXED_WINDOW",
             result_visibility=True
         )
         db.add(exam)
         db.commit()
         db.refresh(exam)
+    else:
+        if exam.start_at_utc is None or exam.end_at_utc is None:
+            exam.start_at_utc = start_utc
+            exam.end_at_utc = end_utc
+            exam.timezone = "Asia/Kolkata"
+            exam.schedule_mode = "FIXED_WINDOW"
+            db.commit()
+            db.refresh(exam)
     return exam
 
 @router.get("/active")
 def get_active_exam(db: Session = Depends(get_db)):
     exam = get_main_exam(db)
-    now = datetime.datetime.utcnow()
-    is_active = exam.start_date <= now <= exam.end_date
+    
+    from app.utils.timezone import now_utc, to_ist, format_ist_for_response
+    import datetime as dt_mod
+    
+    now = now_utc()
+    
+    start_utc = exam.start_at_utc
+    if start_utc is None:
+        start_utc = exam.start_date
+    if start_utc.tzinfo is None:
+        start_utc = start_utc.replace(tzinfo=dt_mod.timezone.utc)
+        
+    end_utc = exam.end_at_utc
+    if end_utc is None:
+        end_utc = exam.end_date
+    if end_utc.tzinfo is None:
+        end_utc = end_utc.replace(tzinfo=dt_mod.timezone.utc)
+        
+    is_active = start_utc <= now <= end_utc
+    is_start_allowed = start_utc <= now < end_utc
+    exam_not_started = now < start_utc
+    seconds_until_start = max(0, int((start_utc - now).total_seconds()))
+    
+    starts_at_ist = format_ist_for_response(start_utc)
+    ends_at_ist = format_ist_for_response(end_utc)
+    server_time_ist = format_ist_for_response(now)
+    
     return {
         "id": exam.id,
         "name": exam.name,
         "total_questions": exam.total_questions,
         "duration_minutes": exam.duration_minutes,
-        "start_date": exam.start_date,
-        "end_date": exam.end_date,
-        "result_visibility": exam.result_visibility,
+        "start_date": start_utc,
+        "end_date": end_utc,
+        "start_at_utc": start_utc,
+        "end_at_utc": end_utc,
+        "timezone": exam.timezone or "Asia/Kolkata",
+        "schedule_mode": exam.schedule_mode or "FIXED_WINDOW",
+        "starts_at_ist": starts_at_ist,
+        "ends_at_ist": ends_at_ist,
         "is_active_now": is_active,
-        "server_time": now
+        "server_time": to_ist(now),
+        "server_time_utc": now,
+        
+        # New timezone lock parameters
+        "is_exam_configured": True,
+        "is_login_allowed": True,
+        "is_start_allowed": is_start_allowed,
+        "exam_not_started": exam_not_started,
+        "seconds_until_start": seconds_until_start,
+        "server_time_ist": server_time_ist
     }
 
 @router.put("/settings", response_model=ExamResponse)
@@ -84,13 +139,36 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
         )
 
     exam = get_main_exam(db)
-    now = datetime.datetime.utcnow()
     
-    # 3. Check exam window
-    if now < exam.start_date or now > exam.end_date:
+    from app.utils.timezone import now_utc, format_ist_for_response
+    now = now_utc()
+    
+    start_at_utc = exam.start_at_utc
+    if start_at_utc is None:
+        start_at_utc = exam.start_date
+    if start_at_utc.tzinfo is None:
+        start_at_utc = start_at_utc.replace(tzinfo=datetime.timezone.utc)
+        
+    end_at_utc = exam.end_at_utc
+    if end_at_utc is None:
+        end_at_utc = exam.end_date
+    if end_at_utc.tzinfo is None:
+        end_at_utc = end_at_utc.replace(tzinfo=datetime.timezone.utc)
+        
+    # 3. Check if before start
+    if now < start_at_utc:
+        seconds_until_start = int((start_at_utc - now).total_seconds())
+        starts_at_ist = format_ist_for_response(start_at_utc)
+        server_time_ist = format_ist_for_response(now)
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The examination is not currently active or available."
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "detail": "Exam has not started yet.",
+                "exam_not_started": True,
+                "seconds_until_start": seconds_until_start,
+                "starts_at_ist": starts_at_ist,
+                "server_time_ist": server_time_ist
+            }
         )
         
     # 4. Check for existing attempts
@@ -98,6 +176,49 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
         ExamAttempt.candidate_id == current_candidate.id,
         ExamAttempt.exam_id == exam.id
     ).first()
+    
+    extension_mins = attempt.time_extension_minutes if attempt else 0
+    effective_end_at_utc = end_at_utc + datetime.timedelta(minutes=extension_mins)
+    
+    # 5. Check if after effective end time
+    if now >= effective_end_at_utc:
+        if attempt and attempt.status in ["active", "admin_reopened"]:
+            # Auto submit it
+            attempt.is_submitted = True
+            attempt.submitted_at = now.replace(tzinfo=None) # Store naive UTC
+            # Calculate elapsed seconds and cap it
+            elapsed = (now - attempt.started_at.replace(tzinfo=datetime.timezone.utc)).total_seconds()
+            total_duration_sec = (exam.duration_minutes + attempt.time_extension_minutes) * 60
+            attempt.elapsed_seconds_at_submit = max(0, min(int(elapsed), int(total_duration_sec)))
+            attempt.submit_source = "time_over"
+            attempt.submitted_reason = "Exam time is over"
+            attempt.status = "auto_submitted"
+            
+            from app.utils.scoring import calculate_and_save_score
+            calculate_and_save_score(db, attempt)
+            db.commit()
+            
+            from app.utils.event_logger import log_event
+            log_event(
+                db,
+                attempt.id,
+                current_candidate.id,
+                "auto_submitted",
+                "Exam attempt auto-submitted as exam window closed",
+                metadata={
+                    "submit_source": "time_over",
+                    "submitted_reason": "Exam time is over",
+                    "elapsed_seconds": attempt.elapsed_seconds_at_submit,
+                    "score": attempt.score
+                }
+            )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "detail": "Exam is closed.",
+                "exam_closed": True
+            }
+        )
     
     if attempt and attempt.status in ["submitted", "auto_submitted", "force_submitted"]:
         raise HTTPException(
@@ -314,9 +435,14 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
             "source_s_no": q.source_s_no
         })
 
-    elapsed_seconds = (now - attempt.started_at).total_seconds()
-    duration_seconds = (exam.duration_minutes + attempt.time_extension_minutes) * 60
-    remaining_seconds = max(0, int(duration_seconds - elapsed_seconds))
+    started_at_aware = attempt.started_at.replace(tzinfo=datetime.timezone.utc) if attempt.started_at.tzinfo is None else attempt.started_at
+    if (exam.schedule_mode or "FIXED_WINDOW") == "FIXED_WINDOW":
+        rem_sec = (end_at_utc - now).total_seconds() + attempt.time_extension_minutes * 60
+        remaining_seconds = max(0, min(int(rem_sec), (exam.duration_minutes + attempt.time_extension_minutes) * 60))
+    else:
+        elapsed_seconds = (now - started_at_aware).total_seconds()
+        duration_seconds = (exam.duration_minutes + attempt.time_extension_minutes) * 60
+        remaining_seconds = max(0, int(duration_seconds - elapsed_seconds))
 
     return {
         "attempt_id": attempt.id,
@@ -433,7 +559,7 @@ def submit_exam(
 
     if attempt.is_submitted and attempt.status in ["submitted", "auto_submitted", "force_submitted"]:
         saved_answers = db.query(StudentAnswer).filter(StudentAnswer.attempt_id == attempt.id).all()
-        attempted_count = sum(1 for ans in saved_answers if ans.selected_option is not None and ans.question_id in final_order)
+        attempted_count = sum(1 for ans in saved_answers if ans.selected_option is not None and ans.selected_option != "" and ans.question_id in final_order)
         
         entrance_perc = attempt.percentage
         final_perc = round((ug_perc * 0.5) + (entrance_perc * 0.5), 2)
@@ -445,6 +571,7 @@ def submit_exam(
             "degrees": degrees_list,
             "total_questions": attempt.total_questions,
             "attempted_questions": attempted_count,
+            "unanswered_questions": max(0, len(final_order) - attempted_count),
             "correct_answers": attempt.correct_answers,
             "wrong_answers": attempt.wrong_answers,
             "score": attempt.score,
@@ -459,14 +586,28 @@ def submit_exam(
     from app.utils.scoring import calculate_and_save_score
     calculate_and_save_score(db, attempt)
 
-    now = datetime.datetime.utcnow()
-    # Calculate elapsed_seconds_at_submit and cap it
-    elapsed = (now - attempt.started_at).total_seconds()
-    total_duration_sec = (exam.duration_minutes + attempt.time_extension_minutes) * 60
-    attempt.elapsed_seconds_at_submit = max(0, min(int(elapsed), int(total_duration_sec)))
+    from app.utils.timezone import now_utc
+    now = now_utc()
+    
+    end_at_utc = exam.end_at_utc
+    if end_at_utc is None:
+        end_at_utc = exam.end_date
+    if end_at_utc.tzinfo is None:
+        end_at_utc = end_at_utc.replace(tzinfo=datetime.timezone.utc)
+        
+    started_at_aware = attempt.started_at.replace(tzinfo=datetime.timezone.utc) if attempt.started_at.tzinfo is None else attempt.started_at
+    
+    if (exam.schedule_mode or "FIXED_WINDOW") == "FIXED_WINDOW":
+        max_allowed_sec = (end_at_utc - started_at_aware).total_seconds() + attempt.time_extension_minutes * 60
+        max_allowed_sec = max(0, min(max_allowed_sec, (exam.duration_minutes + attempt.time_extension_minutes) * 60))
+    else:
+        max_allowed_sec = (exam.duration_minutes + attempt.time_extension_minutes) * 60
+        
+    elapsed = (now - started_at_aware).total_seconds()
+    attempt.elapsed_seconds_at_submit = max(0, min(int(elapsed), int(max_allowed_sec)))
 
     attempt.is_submitted = True
-    attempt.submitted_at = now
+    attempt.submitted_at = now.replace(tzinfo=None)
     attempt.submit_source = payload.submit_source or "manual"
     attempt.submitted_reason = payload.submitted_reason
     attempt.status = "auto_submitted" if payload.submit_source == "auto_tab_violation" else "submitted"
@@ -491,7 +632,7 @@ def submit_exam(
     )
 
     saved_answers = db.query(StudentAnswer).filter(StudentAnswer.attempt_id == attempt.id).all()
-    attempted_count = sum(1 for ans in saved_answers if ans.selected_option is not None and ans.question_id in final_order)
+    attempted_count = sum(1 for ans in saved_answers if ans.selected_option is not None and ans.selected_option != "" and ans.question_id in final_order)
     entrance_perc = attempt.percentage
     final_perc = round((ug_perc * 0.5) + (entrance_perc * 0.5), 2)
 
@@ -502,6 +643,7 @@ def submit_exam(
         "degrees": degrees_list,
         "total_questions": attempt.total_questions,
         "attempted_questions": attempted_count,
+        "unanswered_questions": max(0, len(final_order) - attempted_count),
         "correct_answers": attempt.correct_answers,
         "wrong_answers": attempt.wrong_answers,
         "score": attempt.score,

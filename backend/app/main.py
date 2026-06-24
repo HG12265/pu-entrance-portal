@@ -1,5 +1,6 @@
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import Base, engine, SessionLocal
@@ -80,6 +81,20 @@ def run_migrations():
             db.execute(text("ALTER TABLE student_answers ADD COLUMN updated_at DATETIME NULL"))
             db.commit()
             print("Migration: Column 'updated_at' added to student_answers table.")
+
+        # Additional columns for exams table
+        exam_cols = {
+            "start_at_utc": "DATETIME NULL",
+            "end_at_utc": "DATETIME NULL",
+            "timezone": "VARCHAR(100) NOT NULL DEFAULT 'Asia/Kolkata'",
+            "schedule_mode": "VARCHAR(50) NOT NULL DEFAULT 'FIXED_WINDOW'"
+        }
+        for col, col_type in exam_cols.items():
+            res = db.execute(text(f"SHOW COLUMNS FROM exams LIKE '{col}'")).fetchone()
+            if not res:
+                db.execute(text(f"ALTER TABLE exams ADD COLUMN {col} {col_type}"))
+                db.commit()
+                print(f"Migration: Column '{col}' added to exams table.")
 
     except Exception as e:
         print(f"Migration warning: {e}")
@@ -211,15 +226,22 @@ def seed_default_exam():
         from app.models import Exam
         import datetime
         exam = db.query(Exam).first()
-        start = datetime.datetime(2026, 6, 20, 0, 0, 0)
-        end = datetime.datetime(2026, 7, 5, 23, 59, 59)
+        
+        # 10:30 AM IST = 05:00 UTC
+        start_utc = datetime.datetime(2026, 6, 29, 5, 0, 0)
+        end_utc = datetime.datetime(2026, 6, 29, 7, 0, 0)
+        
         if not exam:
             exam = Exam(
                 name="Periyar University Entrance Examination 2026",
                 total_questions=100,
                 duration_minutes=120,
-                start_date=start,
-                end_date=end,
+                start_date=start_utc,
+                end_date=end_utc,
+                start_at_utc=start_utc,
+                end_at_utc=end_utc,
+                timezone="Asia/Kolkata",
+                schedule_mode="FIXED_WINDOW",
                 result_visibility=True
             )
             db.add(exam)
@@ -227,8 +249,12 @@ def seed_default_exam():
         else:
             exam.total_questions = 100
             exam.duration_minutes = 120
-            exam.start_date = start
-            exam.end_date = end
+            exam.start_date = start_utc
+            exam.end_date = end_utc
+            exam.start_at_utc = start_utc
+            exam.end_at_utc = end_utc
+            exam.timezone = "Asia/Kolkata"
+            exam.schedule_mode = "FIXED_WINDOW"
         db.commit()
     except Exception as e:
         print(f"Error seeding exam: {e}")
@@ -250,6 +276,21 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request, exc):
+    if isinstance(exc.detail, dict):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=exc.detail,
+            headers=exc.headers
+        )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=exc.headers
+    )
+
 app.add_middleware(SlowAPIMiddleware)
 
 # Enable CORS for frontend integration

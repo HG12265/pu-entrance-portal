@@ -12,6 +12,7 @@ const StudentLogin = () => {
   });
   const [error, setError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [infoMessage, setInfoMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [examActive, setExamActive] = useState(true);
 
@@ -26,9 +27,15 @@ const StudentLogin = () => {
     // Check if exam is active
     api.get("/api/v1/exams/active")
       .then((res) => {
-        if (!res.data.is_active_now) {
+        if (res.data.exam_not_started) {
+          setExamActive(true);
+          setInfoMessage(`The entrance examination will start at ${res.data.starts_at_ist || "29 June 2026, 10:30 AM IST"}. You can login and verify your details now.`);
+        } else if (!res.data.is_login_allowed) {
           setExamActive(false);
           setError("The entrance examination is not active at this time.");
+        } else {
+          setExamActive(true);
+          setInfoMessage("");
         }
       })
       .catch((err) => {
@@ -109,6 +116,7 @@ const StudentLogin = () => {
         </div>
 
         {error && <div className="alert alert-danger">{error}</div>}
+        {infoMessage && <div className="alert alert-info">{infoMessage}</div>}
         {successMessage && <div className="alert alert-success">{successMessage}</div>}
 
         {!examActive && (

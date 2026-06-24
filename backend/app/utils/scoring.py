@@ -32,7 +32,7 @@ def calculate_and_save_score(db: Session, attempt: ExamAttempt) -> ExamAttempt:
         ans = answers_map.get(q_id)
         selected = ans.selected_option if ans else None
         
-        if selected:
+        if selected is not None and selected != "":
             attempted_count += 1
             if selected.upper() == q.correct_option.upper():
                 correct_count += 1

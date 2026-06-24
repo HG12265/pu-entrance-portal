@@ -61,11 +61,18 @@ const AdminDashboard = () => {
   // Settings states
   const [examSettings, setExamSettings] = useState({
     name: "",
-    total_questions: 30,
-    duration_minutes: 30,
-    start_date: "",
-    end_date: "",
-    result_visibility: true
+    total_questions: 100,
+    duration_minutes: 120,
+    exam_date: "2026-06-29",
+    start_time: "10:30",
+    schedule_mode: "FIXED_WINDOW",
+    timezone: "Asia/Kolkata",
+    starts_at_ist_formatted: "",
+    ends_at_ist_formatted: "",
+    start_at_utc: "",
+    end_at_utc: "",
+    active_attempts_count: 0,
+    has_active_attempts: false
   });
   const [editingCourseId, setEditingCourseId] = useState(null);
   const [editSeatCount, setEditSeatCount] = useState(30);
@@ -374,14 +381,21 @@ const AdminDashboard = () => {
   const loadExamSettings = async () => {
     setLoading(true);
     try {
-      const res = await api.get("/api/v1/exams/active");
+      const res = await api.get("/api/v1/auth/exam-settings");
       setExamSettings({
         name: res.data.name,
         total_questions: res.data.total_questions,
         duration_minutes: res.data.duration_minutes,
-        start_date: res.data.start_date.substring(0, 16),
-        end_date: res.data.end_date.substring(0, 16),
-        result_visibility: res.data.result_visibility
+        exam_date: res.data.exam_date_ist,
+        start_time: res.data.start_time_ist,
+        schedule_mode: res.data.schedule_mode,
+        timezone: res.data.timezone || "Asia/Kolkata",
+        starts_at_ist_formatted: res.data.starts_at_ist_formatted,
+        ends_at_ist_formatted: res.data.ends_at_ist_formatted,
+        start_at_utc: res.data.start_at_utc,
+        end_at_utc: res.data.end_at_utc,
+        active_attempts_count: res.data.active_attempts_count,
+        has_active_attempts: res.data.has_active_attempts
       });
     } catch (err) {
       handleApiError(err);
@@ -392,10 +406,34 @@ const AdminDashboard = () => {
 
   const handleSaveSettings = async (e) => {
     e.preventDefault();
+    if (examSettings.has_active_attempts) {
+      const proceed = window.confirm(
+        `Warning: There are ${examSettings.active_attempts_count} active/unsubmitted student attempt(s) currently in the system.\n\n` +
+        "Changing the exam schedule/start time while attempts are active may affect remaining timers or auto-submissions.\n\n" +
+        "Are you sure you want to proceed?"
+      );
+      if (!proceed) return;
+    }
+    
     setActionLoading(true);
     try {
-      await api.put("/api/v1/exams/settings", examSettings);
-      showMessage("Exam settings updated successfully.");
+      const res = await api.put("/api/v1/auth/exam-settings", {
+        exam_date: examSettings.exam_date,
+        start_time: examSettings.start_time,
+        duration_minutes: examSettings.duration_minutes,
+        total_questions: examSettings.total_questions,
+        schedule_mode: examSettings.schedule_mode
+      });
+      showMessage("Exam schedule and settings updated successfully.");
+      setExamSettings({
+        ...examSettings,
+        starts_at_ist_formatted: res.data.starts_at_ist_formatted,
+        ends_at_ist_formatted: res.data.ends_at_ist_formatted,
+        start_at_utc: res.data.start_at_utc,
+        end_at_utc: res.data.end_at_utc,
+        active_attempts_count: res.data.active_attempts_count,
+        has_active_attempts: res.data.has_active_attempts
+      });
     } catch (err) {
       handleApiError(err);
     } finally {
@@ -1512,15 +1550,22 @@ const AdminDashboard = () => {
                     <h3 style={{ fontSize: "1.1rem", fontWeight: "700", marginBottom: "1.2rem", color: "var(--primary-dark)" }}>
                       Entrance Exam Parameters
                     </h3>
+                    
+                    {examSettings.has_active_attempts && (
+                      <div className="alert alert-danger" style={{ marginBottom: "1.5rem" }}>
+                        <strong>Warning:</strong> There are {examSettings.active_attempts_count} active/unsubmitted exam attempts in progress. Changing schedule parameters may affect candidate timers.
+                      </div>
+                    )}
+
                     <form onSubmit={handleSaveSettings}>
                       <div className="form-group" style={{ marginBottom: "1rem" }}>
-                        <label className="form-label">Exam Name</label>
+                        <label className="form-label">Exam Name (For Reference)</label>
                         <input
                           className="form-control"
                           type="text"
                           value={examSettings.name}
-                          onChange={(e) => setExamSettings({ ...examSettings, name: e.target.value })}
-                          required
+                          disabled
+                          style={{ backgroundColor: "#f1f5f9", cursor: "not-allowed" }}
                         />
                       </div>
 
@@ -1550,40 +1595,75 @@ const AdminDashboard = () => {
 
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
                         <div className="form-group">
-                          <label className="form-label">Start Date & Time (UTC)</label>
+                          <label className="form-label">Exam Date (IST)</label>
                           <input
                             className="form-control"
-                            type="datetime-local"
-                            value={examSettings.start_date}
-                            onChange={(e) => setExamSettings({ ...examSettings, start_date: e.target.value })}
+                            type="date"
+                            value={examSettings.exam_date}
+                            onChange={(e) => setExamSettings({ ...examSettings, exam_date: e.target.value })}
                             required
                           />
                         </div>
 
                         <div className="form-group">
-                          <label className="form-label">End Date & Time (UTC)</label>
+                          <label className="form-label">Start Time (IST)</label>
                           <input
                             className="form-control"
-                            type="datetime-local"
-                            value={examSettings.end_date}
-                            onChange={(e) => setExamSettings({ ...examSettings, end_date: e.target.value })}
+                            type="time"
+                            value={examSettings.start_time}
+                            onChange={(e) => setExamSettings({ ...examSettings, start_time: e.target.value })}
                             required
                           />
                         </div>
                       </div>
 
-                      <div className="form-group" style={{ display: "flex", alignItems: "center", gap: "0.5rem", margin: "1.5rem 0" }}>
-                        <input
-                          type="checkbox"
-                          id="result-visibility"
-                          checked={examSettings.result_visibility}
-                          onChange={(e) => setExamSettings({ ...examSettings, result_visibility: e.target.checked })}
-                          style={{ width: "18px", height: "18px", cursor: "pointer" }}
-                        />
-                        <label htmlFor="result-visibility" style={{ fontSize: "0.95rem", fontWeight: "600", cursor: "pointer" }}>
-                          Show detailed score & key breakdown to students upon submission
-                        </label>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1.5rem" }}>
+                        <div className="form-group">
+                          <label className="form-label">Schedule Mode</label>
+                          <select
+                            className="form-control"
+                            value={examSettings.schedule_mode}
+                            onChange={(e) => setExamSettings({ ...examSettings, schedule_mode: e.target.value })}
+                            required
+                          >
+                            <option value="FIXED_WINDOW">FIXED_WINDOW (Strict timing)</option>
+                            <option value="FLEXIBLE_DURATION">FLEXIBLE_DURATION (Anytime start)</option>
+                          </select>
+                        </div>
+
+                        <div className="form-group">
+                          <label className="form-label">Timezone (Fixed)</label>
+                          <input
+                            className="form-control"
+                            type="text"
+                            value="Asia/Kolkata (IST)"
+                            disabled
+                            style={{ backgroundColor: "#f1f5f9", cursor: "not-allowed" }}
+                          />
+                        </div>
                       </div>
+
+                      {examSettings.starts_at_ist_formatted && (
+                        <div style={{ backgroundColor: "#f8fafc", padding: "1rem", borderRadius: "var(--radius-md)", marginBottom: "1.5rem", border: "1px solid #e2e8f0" }}>
+                          <span style={{ fontSize: "0.8rem", textTransform: "uppercase", fontWeight: "700", display: "block", color: "var(--text-muted)", marginBottom: "0.5rem" }}>Calculated India Standard Time (IST)</span>
+                          <div style={{ fontSize: "0.9rem", color: "var(--text-color)" }}>
+                            <strong>Start:</strong> {examSettings.starts_at_ist_formatted}
+                          </div>
+                          <div style={{ fontSize: "0.9rem", color: "var(--text-color)", marginTop: "0.25rem" }}>
+                            <strong>End:</strong> {examSettings.ends_at_ist_formatted}
+                          </div>
+                          
+                          <hr style={{ margin: "0.75rem 0", borderColor: "#e2e8f0" }} />
+                          
+                          <span style={{ fontSize: "0.8rem", textTransform: "uppercase", fontWeight: "700", display: "block", color: "var(--text-muted)", marginBottom: "0.5rem" }}>UTC Values (Database / Debug)</span>
+                          <div style={{ fontSize: "0.85rem", fontFamily: "monospace", color: "#64748b" }}>
+                            UTC Start: {examSettings.start_at_utc}
+                          </div>
+                          <div style={{ fontSize: "0.85rem", fontFamily: "monospace", color: "#64748b" }}>
+                            UTC End: {examSettings.end_at_utc}
+                          </div>
+                        </div>
+                      )}
 
                       <button
                         className="btn btn-primary"
@@ -1591,7 +1671,7 @@ const AdminDashboard = () => {
                         disabled={actionLoading}
                         style={{ width: "100%" }}
                       >
-                        {actionLoading ? "Updating..." : "Save Exam Config"}
+                        {actionLoading ? "Saving Settings..." : "Save Exam Schedule Config"}
                       </button>
                     </form>
                   </div>

@@ -801,7 +801,7 @@ def search_attempts(
                     final_order = order_json.get("final_order", [])
                     total_q = len(final_order)
                     saved_answers = db.query(StudentAnswer).filter(StudentAnswer.attempt_id == attempt.id).all()
-                    answered = sum(1 for ans in saved_answers if ans.selected_option is not None and ans.question_id in final_order)
+                    answered = sum(1 for ans in saved_answers if ans.selected_option is not None and ans.selected_option != "" and ans.question_id in final_order)
                 except Exception as e:
                     print(f"Error parsing order json in search: {e}")
                     
@@ -866,6 +866,24 @@ def reopen_attempt(
         
     if attempt.status not in ["submitted", "auto_submitted", "force_submitted"]:
         raise HTTPException(status_code=400, detail=f"Cannot reopen an attempt with status '{attempt.status}'. Only submitted, auto_submitted, or force_submitted attempts can be reopened.")
+
+    from app.utils.timezone import now_utc
+    exam = db.query(Exam).filter(Exam.id == attempt.exam_id).first()
+    if exam:
+        end_at_utc = exam.end_at_utc
+        if end_at_utc is None:
+            end_at_utc = exam.end_date
+        if end_at_utc.tzinfo is None:
+            end_at_utc = end_at_utc.replace(tzinfo=datetime.timezone.utc)
+        
+        now = now_utc()
+        if now >= end_at_utc:
+            ext_mins = payload.time_extension_minutes or 0
+            if ext_mins <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Exam window is already closed. Add time extension to allow resume."
+                )
         
     # Capture old details in event log metadata before clearing
     answered_count = 0
@@ -887,14 +905,14 @@ def reopen_attempt(
     }
 
     # Adjust started_at to maintain remaining time
-    attempt.started_at = datetime.datetime.utcnow() - datetime.timedelta(seconds=attempt.elapsed_seconds_at_submit)
+    attempt.started_at = (now_utc() - datetime.timedelta(seconds=attempt.elapsed_seconds_at_submit)).replace(tzinfo=None)
         
     # Update fields
     attempt.status = "admin_reopened"
     attempt.is_submitted = False
     attempt.submitted_at = None
     attempt.reopened_by_admin_id = current_admin.id
-    attempt.reopened_at = datetime.datetime.utcnow()
+    attempt.reopened_at = now_utc().replace(tzinfo=None)
     attempt.reopen_reason = payload.reason
     attempt.reopen_count += 1
     attempt.time_extension_minutes += payload.time_extension_minutes or 0
@@ -935,15 +953,29 @@ def force_submit_attempt(
     from app.utils.scoring import calculate_and_save_score
     calculate_and_save_score(db, attempt)
 
-    now = datetime.datetime.utcnow()
-    elapsed = (now - attempt.started_at).total_seconds()
+    from app.utils.timezone import now_utc
+    now = now_utc()
+    started_at_aware = attempt.started_at.replace(tzinfo=datetime.timezone.utc) if attempt.started_at.tzinfo is None else attempt.started_at
+    elapsed = (now - started_at_aware).total_seconds()
     exam = db.query(Exam).filter(Exam.id == attempt.exam_id).first()
-    total_duration_sec = ((exam.duration_minutes if exam else 120) + attempt.time_extension_minutes) * 60
-    attempt.elapsed_seconds_at_submit = max(0, min(int(elapsed), int(total_duration_sec)))
+    
+    end_at_utc = exam.end_at_utc if exam else None
+    if end_at_utc is None and exam:
+        end_at_utc = exam.end_date
+    if end_at_utc and end_at_utc.tzinfo is None:
+        end_at_utc = end_at_utc.replace(tzinfo=datetime.timezone.utc)
+        
+    if exam and (exam.schedule_mode or "FIXED_WINDOW") == "FIXED_WINDOW" and end_at_utc:
+        max_allowed_sec = (end_at_utc - started_at_aware).total_seconds() + attempt.time_extension_minutes * 60
+        max_allowed_sec = max(0, min(max_allowed_sec, ((exam.duration_minutes if exam else 120) + attempt.time_extension_minutes) * 60))
+    else:
+        max_allowed_sec = ((exam.duration_minutes if exam else 120) + attempt.time_extension_minutes) * 60
+        
+    attempt.elapsed_seconds_at_submit = max(0, min(int(elapsed), int(max_allowed_sec)))
     
     attempt.status = "force_submitted"
     attempt.is_submitted = True
-    attempt.submitted_at = now
+    attempt.submitted_at = now.replace(tzinfo=None)
     attempt.submit_source = "admin_force"
     attempt.submitted_reason = payload.reason or "Force submitted by admin"
     
@@ -961,3 +993,123 @@ def force_submit_attempt(
     )
     
     return {"status": "success", "message": "Attempt force-submitted successfully."}
+
+
+class ExamSettingsUpdatePayload(BaseModel):
+    exam_date: str  # YYYY-MM-DD
+    start_time: str  # HH:MM
+    duration_minutes: int
+    total_questions: int
+    schedule_mode: str  # FIXED_WINDOW, FLEXIBLE_DURATION
+
+
+@router.get("/exam-settings")
+def get_exam_settings(current_admin: Admin = Depends(get_current_admin), db: Session = Depends(get_db)):
+    exam = db.query(Exam).first()
+    if not exam:
+        from app.routers.exams import get_main_exam
+        exam = get_main_exam(db)
+        
+    from app.utils.timezone import to_ist, format_ist_for_response, now_utc
+    
+    start_utc = exam.start_at_utc
+    if start_utc is None:
+        start_utc = exam.start_date
+    if start_utc.tzinfo is None:
+        start_utc = start_utc.replace(tzinfo=datetime.timezone.utc)
+        
+    end_utc = exam.end_at_utc
+    if end_utc is None:
+        end_utc = exam.end_date
+    if end_utc.tzinfo is None:
+        end_utc = end_utc.replace(tzinfo=datetime.timezone.utc)
+        
+    start_ist = to_ist(start_utc)
+    end_ist = to_ist(end_utc)
+    
+    active_attempts_count = db.query(ExamAttempt).filter(ExamAttempt.is_submitted == False).count()
+    
+    return {
+        "id": exam.id,
+        "name": exam.name,
+        "total_questions": exam.total_questions,
+        "duration_minutes": exam.duration_minutes,
+        "schedule_mode": exam.schedule_mode,
+        "timezone": exam.timezone,
+        
+        # IST display values
+        "exam_date_ist": start_ist.strftime("%Y-%m-%d"),
+        "start_time_ist": start_ist.strftime("%H:%M"),
+        "starts_at_ist_formatted": format_ist_for_response(start_utc),
+        "ends_at_ist_formatted": format_ist_for_response(end_utc),
+        
+        # UTC raw values
+        "start_at_utc": start_utc.isoformat(),
+        "end_at_utc": end_utc.isoformat(),
+        
+        # Metadata
+        "active_attempts_count": active_attempts_count,
+        "has_active_attempts": active_attempts_count > 0
+    }
+
+
+@router.put("/exam-settings")
+def update_exam_settings_ist(
+    payload: ExamSettingsUpdatePayload,
+    current_admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    exam = db.query(Exam).first()
+    if not exam:
+        from app.routers.exams import get_main_exam
+        exam = get_main_exam(db)
+        
+    from app.utils.timezone import parse_admin_ist_datetime, to_ist, format_ist_for_response, now_utc
+    
+    try:
+        start_utc_aware = parse_admin_ist_datetime(payload.exam_date, payload.start_time)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid date or time format: {e}")
+        
+    end_utc_aware = start_utc_aware + datetime.timedelta(minutes=payload.duration_minutes)
+    
+    start_utc_naive = start_utc_aware.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    end_utc_naive = end_utc_aware.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    
+    exam.start_at_utc = start_utc_naive
+    exam.end_at_utc = end_utc_naive
+    exam.duration_minutes = payload.duration_minutes
+    exam.total_questions = payload.total_questions
+    exam.schedule_mode = payload.schedule_mode
+    
+    # Backwards compatibility fields
+    exam.start_date = start_utc_naive
+    exam.end_date = end_utc_naive
+    
+    db.commit()
+    db.refresh(exam)
+    
+    start_ist = to_ist(start_utc_aware)
+    end_ist = to_ist(end_utc_aware)
+    
+    active_attempts_count = db.query(ExamAttempt).filter(ExamAttempt.is_submitted == False).count()
+    
+    return {
+        "id": exam.id,
+        "name": exam.name,
+        "total_questions": exam.total_questions,
+        "duration_minutes": exam.duration_minutes,
+        "schedule_mode": exam.schedule_mode,
+        "timezone": exam.timezone,
+        
+        "exam_date_ist": start_ist.strftime("%Y-%m-%d"),
+        "start_time_ist": start_ist.strftime("%H:%M"),
+        "starts_at_ist_formatted": format_ist_for_response(start_utc_aware),
+        "ends_at_ist_formatted": format_ist_for_response(end_utc_aware),
+        
+        "start_at_utc": start_utc_naive.isoformat(),
+        "end_at_utc": end_utc_naive.isoformat(),
+        
+        "active_attempts_count": active_attempts_count,
+        "has_active_attempts": active_attempts_count > 0
+    }

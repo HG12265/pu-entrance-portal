@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api";
 
@@ -9,6 +9,7 @@ const Instructions = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [agreed, setAgreed] = useState(false);
+  const [timeLeftToStart, setTimeLeftToStart] = useState(0);
 
   useEffect(() => {
     // Check if student is registered
@@ -23,20 +24,70 @@ const Instructions = () => {
       return;
     }
     setStudent(cand);
-
-    // Fetch active exam information
-    api.get("/api/v1/exams/active")
-      .then((res) => {
-        setExamInfo(res.data);
-      })
-      .catch((err) => {
-        setError("Error loading exam configuration. Please contact admin.");
-        console.error(err);
-      })
-      .finally(() => {
-        setLoading(false);
-      });
   }, [navigate]);
+
+  const fetchExam = useCallback(async () => {
+    try {
+      const res = await api.get("/api/v1/exams/active");
+      setExamInfo(res.data);
+      if (res.data.exam_not_started && res.data.seconds_until_start !== undefined) {
+        setTimeLeftToStart(res.data.seconds_until_start);
+      } else {
+        setTimeLeftToStart(0);
+      }
+    } catch (err) {
+      setError("Error loading exam configuration. Please contact admin.");
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchExam();
+    const intervalId = setInterval(fetchExam, 15000);
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [fetchExam]);
+
+  useEffect(() => {
+    if (timeLeftToStart <= 0) return;
+    const interval = setInterval(() => {
+      setTimeLeftToStart((prev) => {
+        const nextVal = Math.max(0, prev - 1);
+        if (nextVal === 0) {
+          // Immediately fetch status when countdown hits 0
+          fetchExam();
+        }
+        return nextVal;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [timeLeftToStart, fetchExam]);
+
+  const formatTimeLeft = (totalSeconds) => {
+    if (totalSeconds <= 0) return "00:00:00";
+    const hrs = Math.floor(totalSeconds / 3600);
+    const mins = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+    return `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  const getFormattedSchedule = () => {
+    if (!examInfo) return { date: "29 June 2026", time: "10:30 AM - 12:30 PM IST" };
+    const startParts = examInfo.starts_at_ist ? examInfo.starts_at_ist.split(",") : [];
+    const endParts = examInfo.ends_at_ist ? examInfo.ends_at_ist.split(",") : [];
+    
+    const date = startParts[0] || "29 June 2026";
+    const startTime = startParts[1]?.trim()?.replace(" IST", "") || "10:30 AM";
+    const endTime = endParts[1]?.trim() || "12:30 PM IST";
+    
+    return {
+      date,
+      time: `${startTime} - ${endTime}`
+    };
+  };
 
   const handleStartExam = async () => {
     if (!agreed) return;
@@ -55,8 +106,19 @@ const Instructions = () => {
     } catch (err) {
       let errMsg = "Could not start exam. Please try again.";
       const detail = err.response?.data?.detail;
-      if (typeof detail === "string") {
+      
+      const isNotStarted = (err.response?.status === 403 && (err.response?.data?.exam_not_started || (detail && typeof detail === "object" && detail.exam_not_started)));
+      
+      if (isNotStarted) {
+        errMsg = "Exam has not started yet. Please wait until 10:30 AM IST.";
+        const secs = detail && typeof detail === "object" ? detail.seconds_until_start : err.response?.data?.seconds_until_start;
+        if (secs !== undefined) {
+          setTimeLeftToStart(secs);
+        }
+      } else if (typeof detail === "string") {
         errMsg = detail;
+      } else if (typeof detail === "object" && detail !== null && detail.detail) {
+        errMsg = detail.detail;
       } else if (Array.isArray(detail)) {
         errMsg = detail.map((e) => {
           const field = e.loc ? e.loc[e.loc.length - 1] : "";
@@ -76,6 +138,9 @@ const Instructions = () => {
     );
   }
 
+  const isStartButtonDisabled = !agreed || loading || timeLeftToStart > 0 || (examInfo && !examInfo.is_start_allowed);
+  const schedule = getFormattedSchedule();
+
   return (
     <div className="centered-container">
       <div className="glass-card instructions-container animate-slide-up">
@@ -87,6 +152,15 @@ const Instructions = () => {
         </p>
 
         {error && <div className="alert alert-danger">{error}</div>}
+
+        {timeLeftToStart > 0 && (
+          <div className="alert alert-warning" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem" }}>
+            <span><strong>Exam Status:</strong> Waiting for official start time.</span>
+            <span style={{ fontSize: "1.1rem", fontWeight: "800", letterSpacing: "1px" }}>
+              Exam starts in {formatTimeLeft(timeLeftToStart)}
+            </span>
+          </div>
+        )}
 
         {examInfo && (
           <div style={{ backgroundColor: "#f8fafc", padding: "1.25rem", borderRadius: "var(--radius-md)", marginBottom: "1.5rem" }}>
@@ -103,9 +177,13 @@ const Instructions = () => {
                 <p style={{ fontWeight: "600", fontSize: "1.1rem" }}>{examInfo.total_questions} MCQs</p>
               </div>
               <div>
-                <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Negative Marking:</span>
-                <p style={{ fontWeight: "600", fontSize: "1.1rem", color: "var(--success)" }}>
-                  Nil
+                <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Exam Date:</span>
+                <p style={{ fontWeight: "600", fontSize: "1.1rem" }}>{schedule.date}</p>
+              </div>
+              <div>
+                <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Exam Time:</span>
+                <p style={{ fontWeight: "600", fontSize: "1.1rem", color: "var(--primary)" }}>
+                  {schedule.time}
                 </p>
               </div>
             </div>
@@ -145,10 +223,10 @@ const Instructions = () => {
           <button
             className="btn btn-primary"
             onClick={handleStartExam}
-            disabled={!agreed || loading}
+            disabled={isStartButtonDisabled}
             style={{ flexGrow: "1" }}
           >
-            {loading ? "Starting..." : "I am ready, Start Exam"}
+            {loading ? "Starting..." : timeLeftToStart > 0 ? `Exam starts in ${formatTimeLeft(timeLeftToStart)}` : "I am ready, Start Exam"}
           </button>
         </div>
       </div>
