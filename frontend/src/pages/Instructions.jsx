@@ -138,7 +138,7 @@ const Instructions = () => {
     );
   }
 
-  const isStartButtonDisabled = !agreed || loading || timeLeftToStart > 0 || (examInfo && !examInfo.is_start_allowed);
+  const isStartButtonDisabled = !agreed || loading || timeLeftToStart > 0;
   const schedule = getFormattedSchedule();
 
   return (

@@ -24,11 +24,13 @@ except Exception as e:
 engine = create_engine(
     settings.db_url,
     pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20
+    pool_size=100,
+    max_overflow=50,
+    pool_timeout=60,
+    pool_recycle=1800
 )
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
 Base = declarative_base()
 
 def get_db():

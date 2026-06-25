@@ -65,6 +65,8 @@ def main():
                 duration_minutes=120,
                 start_date=datetime.datetime.utcnow() - datetime.timedelta(days=1),
                 end_date=datetime.datetime.utcnow() + datetime.timedelta(days=1),
+                start_at_utc=datetime.datetime.utcnow() - datetime.timedelta(days=1),
+                end_at_utc=datetime.datetime.utcnow() + datetime.timedelta(days=1),
                 result_visibility=True
             )
             db.add(exam)
@@ -75,6 +77,8 @@ def main():
             exam.duration_minutes = 120
             exam.start_date = datetime.datetime.utcnow() - datetime.timedelta(days=1)
             exam.end_date = datetime.datetime.utcnow() + datetime.timedelta(days=1)
+            exam.start_at_utc = datetime.datetime.utcnow() - datetime.timedelta(days=1)
+            exam.end_at_utc = datetime.datetime.utcnow() + datetime.timedelta(days=1)
             db.commit()
 
         # 4. Ensure balanced questions (25 per part)

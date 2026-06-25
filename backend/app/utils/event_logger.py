@@ -3,7 +3,7 @@ import datetime
 from sqlalchemy.orm import Session
 from app.models import ExamAttemptEventLog
 
-def log_event(db: Session, attempt_id: int, candidate_id: int, event_type: str, event_message: str, metadata: dict = None):
+def log_event(db: Session, attempt_id: int, candidate_id: int, event_type: str, event_message: str, metadata: dict = None, commit: bool = True):
     try:
         log = ExamAttemptEventLog(
             attempt_id=attempt_id,
@@ -14,8 +14,10 @@ def log_event(db: Session, attempt_id: int, candidate_id: int, event_type: str, 
             created_at=datetime.datetime.utcnow()
         )
         db.add(log)
-        db.commit()
+        if commit:
+            db.commit()
         print(f"[EVENT LOGGED] {event_type}: {event_message}")
     except Exception as e:
-        db.rollback()
+        if commit:
+            db.rollback()
         print(f"[ERROR LOGGING EVENT] {e}")

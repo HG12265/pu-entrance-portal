@@ -5,7 +5,7 @@ import api from "../api";
 const StudentLogin = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  
+
   const [formData, setFormData] = useState({
     application_number: "",
     mobile_number: "",
@@ -69,13 +69,13 @@ const StudentLogin = () => {
       });
 
       const { access_token, candidate, applications, attempt_status, attempt_id } = response.data;
-      
+
       // Store session and token securely
       localStorage.setItem("student_token", access_token);
       localStorage.setItem("student_session", JSON.stringify(candidate));
       localStorage.setItem("student_applications", JSON.stringify(applications));
       localStorage.setItem("exam_status", attempt_status);
-      
+
       if (attempt_id) {
         localStorage.setItem("attempt_id", attempt_id);
       } else {
@@ -129,13 +129,13 @@ const StudentLogin = () => {
           <form onSubmit={handleSubmit}>
             <div style={{ display: "flex", flexDirection: "column", gap: "1.2rem" }}>
               <div className="form-group">
-                <label className="form-label" htmlFor="application_number">Application Number</label>
+                <label className="form-label" htmlFor="application_number">Application Number Format: PU/PA/26/0000</label>
                 <input
                   className="form-control"
                   type="text"
                   id="application_number"
                   name="application_number"
-                  placeholder="e.g. PU202610234"
+                  placeholder="e.g. PU/PA/26/0000"
                   value={formData.application_number}
                   onChange={handleChange}
                   required

@@ -4,7 +4,7 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Literal
 from app.database import get_db
 from app.models import Exam, Candidate, StudentApplication, ExamAttempt, Question, StudentAnswer, Admin
 from app.schemas import ExamCreate, ExamResponse, ExamSubmitResultResponse, StudentAnswerSave
@@ -65,8 +65,8 @@ def get_active_exam(db: Session = Depends(get_db)):
     if end_utc.tzinfo is None:
         end_utc = end_utc.replace(tzinfo=dt_mod.timezone.utc)
         
-    is_active = start_utc <= now <= end_utc
-    is_start_allowed = start_utc <= now < end_utc
+    is_active = now >= start_utc
+    is_start_allowed = now >= start_utc
     exam_not_started = now < start_utc
     seconds_until_start = max(0, int((start_utc - now).total_seconds()))
     
@@ -149,12 +149,6 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
     if start_at_utc.tzinfo is None:
         start_at_utc = start_at_utc.replace(tzinfo=datetime.timezone.utc)
         
-    end_at_utc = exam.end_at_utc
-    if end_at_utc is None:
-        end_at_utc = exam.end_date
-    if end_at_utc.tzinfo is None:
-        end_at_utc = end_at_utc.replace(tzinfo=datetime.timezone.utc)
-        
     # 3. Check if before start
     if now < start_at_utc:
         seconds_until_start = int((start_at_utc - now).total_seconds())
@@ -177,49 +171,46 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
         ExamAttempt.exam_id == exam.id
     ).first()
     
-    extension_mins = attempt.time_extension_minutes if attempt else 0
-    effective_end_at_utc = end_at_utc + datetime.timedelta(minutes=extension_mins)
-    
-    # 5. Check if after effective end time
-    if now >= effective_end_at_utc:
-        if attempt and attempt.status in ["active", "admin_reopened"]:
-            # Auto submit it
-            attempt.is_submitted = True
-            attempt.submitted_at = now.replace(tzinfo=None) # Store naive UTC
-            # Calculate elapsed seconds and cap it
-            elapsed = (now - attempt.started_at.replace(tzinfo=datetime.timezone.utc)).total_seconds()
-            total_duration_sec = (exam.duration_minutes + attempt.time_extension_minutes) * 60
-            attempt.elapsed_seconds_at_submit = max(0, min(int(elapsed), int(total_duration_sec)))
-            attempt.submit_source = "time_over"
-            attempt.submitted_reason = "Exam time is over"
-            attempt.status = "auto_submitted"
+    if attempt:
+        started_at_aware = attempt.started_at.replace(tzinfo=datetime.timezone.utc) if attempt.started_at.tzinfo is None else attempt.started_at
+        personal_end_time = started_at_aware + datetime.timedelta(minutes=exam.duration_minutes + attempt.time_extension_minutes)
+        if now >= personal_end_time:
+            if attempt.status in ["active", "admin_reopened"]:
+                # Auto submit it
+                attempt.is_submitted = True
+                attempt.submitted_at = now.replace(tzinfo=None) # Store naive UTC
+                attempt.elapsed_seconds_at_submit = (exam.duration_minutes + attempt.time_extension_minutes) * 60
+                attempt.submit_source = "time_over"
+                attempt.submitted_reason = "Exam duration expired"
+                attempt.status = "auto_submitted"
+                
+                from app.utils.scoring import calculate_and_save_score
+                calculate_and_save_score(db, attempt)
+                
+                from app.utils.event_logger import log_event
+                log_event(
+                    db,
+                    attempt.id,
+                    current_candidate.id,
+                    "auto_submitted",
+                    "Exam attempt auto-submitted as student duration expired",
+                    metadata={
+                        "submit_source": "time_over",
+                        "submitted_reason": "Exam duration expired",
+                        "elapsed_seconds": attempt.elapsed_seconds_at_submit,
+                        "score": attempt.score
+                    }
+                )
+                db.commit()
             
-            from app.utils.scoring import calculate_and_save_score
-            calculate_and_save_score(db, attempt)
-            db.commit()
-            
-            from app.utils.event_logger import log_event
-            log_event(
-                db,
-                attempt.id,
-                current_candidate.id,
-                "auto_submitted",
-                "Exam attempt auto-submitted as exam window closed",
-                metadata={
-                    "submit_source": "time_over",
-                    "submitted_reason": "Exam time is over",
-                    "elapsed_seconds": attempt.elapsed_seconds_at_submit,
-                    "score": attempt.score
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "detail": "Exam duration has expired and your attempt has been submitted.",
+                    "exam_closed": True
                 }
             )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "detail": "Exam is closed.",
-                "exam_closed": True
-            }
-        )
-    
+            
     if attempt and attempt.status in ["submitted", "auto_submitted", "force_submitted"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -295,16 +286,18 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
         attempt.question_order_json = json.dumps(order_json)
         db.commit()
 
-        # Create StudentAnswer rows only for the final 100 questions
-        for q in ordered_qs:
-            empty_ans = StudentAnswer(
-                attempt_id=attempt.id,
-                question_id=q.id,
-                selected_option=None,
-                is_correct=None,
-                marks_obtained=0.0
-            )
-            db.add(empty_ans)
+        # Create StudentAnswer rows in bulk
+        student_answers_to_insert = [
+            {
+                "attempt_id": attempt.id,
+                "question_id": q.id,
+                "selected_option": None,
+                "is_correct": None,
+                "marks_obtained": 0.0
+            }
+            for q in ordered_qs
+        ]
+        db.bulk_insert_mappings(StudentAnswer, student_answers_to_insert)
         db.commit()
 
         questions = ordered_qs
@@ -369,17 +362,19 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
         # Ensure StudentAnswer records exist for all questions in final_order
         existing_answers = db.query(StudentAnswer).filter(StudentAnswer.attempt_id == attempt.id).all()
         existing_qids = {ans.question_id for ans in existing_answers}
+        answers_to_insert = []
         for q in questions:
             if q.id not in existing_qids:
-                empty_ans = StudentAnswer(
-                    attempt_id=attempt.id,
-                    question_id=q.id,
-                    selected_option=None,
-                    is_correct=None,
-                    marks_obtained=0.0
-                )
-                db.add(empty_ans)
-        db.commit()
+                answers_to_insert.append({
+                    "attempt_id": attempt.id,
+                    "question_id": q.id,
+                    "selected_option": None,
+                    "is_correct": None,
+                    "marks_obtained": 0.0
+                })
+        if answers_to_insert:
+            db.bulk_insert_mappings(StudentAnswer, answers_to_insert)
+            db.commit()
 
     # Load saved answers and compute session states
     saved_answers = db.query(StudentAnswer).filter(StudentAnswer.attempt_id == attempt.id).all()
@@ -436,13 +431,9 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
         })
 
     started_at_aware = attempt.started_at.replace(tzinfo=datetime.timezone.utc) if attempt.started_at.tzinfo is None else attempt.started_at
-    if (exam.schedule_mode or "FIXED_WINDOW") == "FIXED_WINDOW":
-        rem_sec = (end_at_utc - now).total_seconds() + attempt.time_extension_minutes * 60
-        remaining_seconds = max(0, min(int(rem_sec), (exam.duration_minutes + attempt.time_extension_minutes) * 60))
-    else:
-        elapsed_seconds = (now - started_at_aware).total_seconds()
-        duration_seconds = (exam.duration_minutes + attempt.time_extension_minutes) * 60
-        remaining_seconds = max(0, int(duration_seconds - elapsed_seconds))
+    elapsed_seconds = (now - started_at_aware).total_seconds()
+    duration_seconds = (exam.duration_minutes + attempt.time_extension_minutes) * 60
+    remaining_seconds = max(0, int(duration_seconds - elapsed_seconds))
 
     return {
         "attempt_id": attempt.id,
@@ -463,7 +454,7 @@ def start_exam(current_candidate: Candidate = Depends(get_current_candidate), db
 class SaveAnswerPayload(BaseModel):
     attempt_id: int
     question_id: int
-    selected_option: Optional[str] = None
+    selected_option: Optional[Literal["A", "B", "C", "D", "a", "b", "c", "d", ""]] = None
 
 @router.post("/save-answer")
 def save_answer(
@@ -479,7 +470,7 @@ def save_answer(
     
     if not attempt:
         raise HTTPException(status_code=404, detail="Exam attempt not found.")
-    if attempt.status not in ["active", "admin_reopened"]:
+    if attempt.status not in ["active", "admin_reopened"] or attempt.is_submitted:
         raise HTTPException(status_code=400, detail="Cannot edit answers of a submitted or inactive exam.")
         
     # Safeguard: ensure the question is in final_order
@@ -507,9 +498,7 @@ def save_answer(
     db_answer.selected_option = payload.selected_option.upper() if payload.selected_option else None
     db_answer.updated_at = datetime.datetime.utcnow()
     attempt.last_activity_at = datetime.datetime.utcnow()
-    db.commit()
-    
-    # Write event log
+    # Write event log in same transaction
     from app.utils.event_logger import log_event
     log_event(
         db,
@@ -517,8 +506,10 @@ def save_answer(
         current_candidate.id,
         "answer_saved",
         f"Answer saved for question {payload.question_id}: {payload.selected_option}",
-        metadata={"question_id": payload.question_id, "selected_option": payload.selected_option}
+        metadata={"question_id": payload.question_id, "selected_option": payload.selected_option},
+        commit=False
     )
+    db.commit()
     
     return {"status": "saved"}
 
@@ -589,19 +580,9 @@ def submit_exam(
     from app.utils.timezone import now_utc
     now = now_utc()
     
-    end_at_utc = exam.end_at_utc
-    if end_at_utc is None:
-        end_at_utc = exam.end_date
-    if end_at_utc.tzinfo is None:
-        end_at_utc = end_at_utc.replace(tzinfo=datetime.timezone.utc)
-        
     started_at_aware = attempt.started_at.replace(tzinfo=datetime.timezone.utc) if attempt.started_at.tzinfo is None else attempt.started_at
     
-    if (exam.schedule_mode or "FIXED_WINDOW") == "FIXED_WINDOW":
-        max_allowed_sec = (end_at_utc - started_at_aware).total_seconds() + attempt.time_extension_minutes * 60
-        max_allowed_sec = max(0, min(max_allowed_sec, (exam.duration_minutes + attempt.time_extension_minutes) * 60))
-    else:
-        max_allowed_sec = (exam.duration_minutes + attempt.time_extension_minutes) * 60
+    max_allowed_sec = (exam.duration_minutes + attempt.time_extension_minutes) * 60
         
     elapsed = (now - started_at_aware).total_seconds()
     attempt.elapsed_seconds_at_submit = max(0, min(int(elapsed), int(max_allowed_sec)))

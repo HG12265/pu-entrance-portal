@@ -204,5 +204,42 @@ docker compose exec backend python app/cleanup_operational_data.py
 docker compose exec backend python app/cleanup_operational_data.py --confirm
 ```
 
+---
+
+## 🧪 Load Testing & Data Integrity Verification Runbook
+
+Follow these steps to perform load testing for 150 concurrent exam users and verify data integrity:
+
+### 1. Build and Start the Environment
+Make sure all services are built and running:
+```bash
+docker compose up --build -d
+```
+
+### 2. Seed Mock Load Test Students
+Seed 250 load testing candidates with course MCA, verification details enabled, random marks, and ensure exactly 100 questions (25 per section) are active in the database:
+```bash
+docker compose exec backend python app/seed_load_test_students.py --count 250
+```
+
+### 3. Run the Load Test with Locust
+Install Locust and run the load test on the secure HTTPS server:
+```bash
+# Install Locust if not already installed:
+pip install locust
+
+# Run the test (using 'python -m locust' avoids PATH issues on Windows):
+python -m locust -f load_tests/locustfile.py --host=https://localhost:8443
+```
+This will automate the load stages (50 -> 150 -> 250 concurrent users) and record request statistics (average, p95, p99 response times, error rates, timeout errors, 500 errors, and database connection errors). Upon termination, a summary report will be logged to the console.
+
+### 4. Verify Exam Data Integrity
+After the load test completes, verify database constraints, scoring correctness, and counseling rankings:
+```bash
+docker compose exec backend python app/verify_exam_data_integrity.py
+```
+This verifies that every load test user has exactly one attempt, 100 answers, no duplicate entries, correct score calculations, no stuck attempts, and that counselling rankings compile without error.
+
+
 
 

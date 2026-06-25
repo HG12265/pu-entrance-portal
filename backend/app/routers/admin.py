@@ -13,7 +13,6 @@ from app.database import get_db
 from app.models import Admin, Course, Candidate, StudentApplication, ImportBatch, AdmissionConfirmation, Exam, Question, ExamAttempt, CourseCommunitySeat, StudentAnswer
 from app.schemas import AdminResponse, Token, CourseBase, CourseUpdate, CounsellingConfirmRequest, CourseCommunitySeatBase, CourseCommunitySeatUpdate
 from app.auth import create_access_token, get_current_admin, verify_password, get_password_hash
-from app.limiter import limiter
 from app.utils.mobile import normalize_mobile
 from app.utils.names import are_names_equivalent
 
@@ -228,7 +227,6 @@ def name_mismatch(n1: str, n2: str) -> bool:
     return not are_names_equivalent(n1, n2)
 
 @router.post("/login", response_model=Token)
-@limiter.limit("5/minute")
 def login_for_access_token(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     admin = db.query(Admin).filter(Admin.username == form_data.username).first()
     if not admin or not verify_password(form_data.password, admin.password_hash):
@@ -870,20 +868,19 @@ def reopen_attempt(
     from app.utils.timezone import now_utc
     exam = db.query(Exam).filter(Exam.id == attempt.exam_id).first()
     if exam:
-        end_at_utc = exam.end_at_utc
-        if end_at_utc is None:
-            end_at_utc = exam.end_date
-        if end_at_utc.tzinfo is None:
-            end_at_utc = end_at_utc.replace(tzinfo=datetime.timezone.utc)
-        
         now = now_utc()
-        if now >= end_at_utc:
-            ext_mins = payload.time_extension_minutes or 0
-            if ext_mins <= 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Exam window is already closed. Add time extension to allow resume."
-                )
+        started_at_aware = attempt.started_at.replace(tzinfo=datetime.timezone.utc) if attempt.started_at.tzinfo is None else attempt.started_at
+        current_ext = attempt.time_extension_minutes
+        additional_ext = payload.time_extension_minutes or 0
+        total_ext = current_ext + additional_ext
+        
+        personal_end_time = started_at_aware + datetime.timedelta(minutes=exam.duration_minutes + total_ext)
+        if now >= personal_end_time:
+            needed_mins = int((now - started_at_aware).total_seconds() / 60 - exam.duration_minutes - current_ext + 1)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Reopened exam would be immediately expired. You must provide a time extension of at least {needed_mins} minutes to allow the student to resume."
+            )
         
     # Capture old details in event log metadata before clearing
     answered_count = 0
@@ -959,18 +956,7 @@ def force_submit_attempt(
     elapsed = (now - started_at_aware).total_seconds()
     exam = db.query(Exam).filter(Exam.id == attempt.exam_id).first()
     
-    end_at_utc = exam.end_at_utc if exam else None
-    if end_at_utc is None and exam:
-        end_at_utc = exam.end_date
-    if end_at_utc and end_at_utc.tzinfo is None:
-        end_at_utc = end_at_utc.replace(tzinfo=datetime.timezone.utc)
-        
-    if exam and (exam.schedule_mode or "FIXED_WINDOW") == "FIXED_WINDOW" and end_at_utc:
-        max_allowed_sec = (end_at_utc - started_at_aware).total_seconds() + attempt.time_extension_minutes * 60
-        max_allowed_sec = max(0, min(max_allowed_sec, ((exam.duration_minutes if exam else 120) + attempt.time_extension_minutes) * 60))
-    else:
-        max_allowed_sec = ((exam.duration_minutes if exam else 120) + attempt.time_extension_minutes) * 60
-        
+    max_allowed_sec = ((exam.duration_minutes if exam else 120) + attempt.time_extension_minutes) * 60
     attempt.elapsed_seconds_at_submit = max(0, min(int(elapsed), int(max_allowed_sec)))
     
     attempt.status = "force_submitted"

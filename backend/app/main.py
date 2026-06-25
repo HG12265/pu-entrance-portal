@@ -7,11 +7,6 @@ from app.database import Base, engine, SessionLocal
 from app.models import Admin
 from app.auth import get_password_hash
 from app.routers import admin, students, exams, questions, results
-from slowapi.middleware import SlowAPIMiddleware
-from slowapi.errors import RateLimitExceeded
-from slowapi import _rate_limit_exceeded_handler
-from app.limiter import limiter
-
 import os
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
@@ -249,10 +244,14 @@ def seed_default_exam():
         else:
             exam.total_questions = 100
             exam.duration_minutes = 120
-            exam.start_date = start_utc
-            exam.end_date = end_utc
-            exam.start_at_utc = start_utc
-            exam.end_at_utc = end_utc
+            if exam.start_date is None:
+                exam.start_date = start_utc
+            if exam.end_date is None:
+                exam.end_date = end_utc
+            if exam.start_at_utc is None:
+                exam.start_at_utc = start_utc
+            if exam.end_at_utc is None:
+                exam.end_at_utc = end_utc
             exam.timezone = "Asia/Kolkata"
             exam.schedule_mode = "FIXED_WINDOW"
         db.commit()
@@ -274,8 +273,6 @@ app = FastAPI(
     openapi_url="/openapi.json" if settings.SHOW_DOCS else None,
 )
 
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request, exc):
@@ -291,7 +288,6 @@ async def custom_http_exception_handler(request, exc):
         headers=exc.headers
     )
 
-app.add_middleware(SlowAPIMiddleware)
 
 # Enable CORS for frontend integration
 app.add_middleware(

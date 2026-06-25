@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime, date
 
 # Token Schemas
@@ -182,7 +182,7 @@ class QuestionResponseForStudent(BaseModel):
 # Student Answer Schemas
 class StudentAnswerSave(BaseModel):
     question_id: int
-    selected_option: Optional[str] = Field(None, pattern="^[A-Da-d]$")
+    selected_option: Optional[Literal["A", "B", "C", "D", "a", "b", "c", "d", ""]] = None
 
 class StudentAnswerResponse(BaseModel):
     id: int

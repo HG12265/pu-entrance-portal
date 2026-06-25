@@ -8,14 +8,12 @@ from app.database import get_db
 from app.models import Candidate, StudentApplication, ExamAttempt, Admin, Course
 from app.schemas import StudentLoginRequest, StudentLoginResponse, StudentVerificationRequest, CandidateBase, StudentApplicationBase
 from app.auth import get_current_admin, get_current_candidate, create_access_token
-from app.limiter import limiter
 from app.config import settings
 from app.utils.mobile import normalize_mobile
 
 router = APIRouter(prefix="/api/v1/students", tags=["Students"])
 
 @router.post("/login", response_model=StudentLoginResponse)
-@limiter.limit("10/minute")
 def student_login(request: Request, payload: StudentLoginRequest, db: Session = Depends(get_db)):
     generic_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -88,7 +86,6 @@ def student_login(request: Request, payload: StudentLoginRequest, db: Session = 
     }
 
 @router.post("/verify-details")
-@limiter.limit("10/minute")
 def verify_details(
     request: Request,
     payload: StudentVerificationRequest,

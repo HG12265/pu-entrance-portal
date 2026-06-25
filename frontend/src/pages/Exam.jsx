@@ -45,6 +45,110 @@ const Exam = () => {
     return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
+  // ── Offline Queue & Persistence Helpers ────────────────────────────────────
+
+  const saveQueueToLocalStorage = useCallback((attemptIdVal, queueObj) => {
+    const aid = parseInt(attemptIdVal || attemptIdRef.current || localStorage.getItem("attempt_id"));
+    if (!aid) return;
+    const arrayFormat = Object.keys(queueObj).map(qid => ({
+      attempt_id: aid,
+      question_id: parseInt(qid),
+      selected_option: queueObj[qid]
+    }));
+    localStorage.setItem("pending_answer_queue", JSON.stringify(arrayFormat));
+  }, []);
+
+  const loadQueueFromLocalStorage = useCallback((attemptIdVal) => {
+    const aid = parseInt(attemptIdVal || attemptIdRef.current || localStorage.getItem("attempt_id"));
+    if (!aid) return {};
+    const raw = localStorage.getItem("pending_answer_queue");
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const queueObj = {};
+        parsed.forEach(item => {
+          if (item.attempt_id === aid) {
+            queueObj[item.question_id] = item.selected_option;
+          }
+        });
+        return queueObj;
+      }
+    } catch (e) {
+      console.error("Failed to parse local storage queue:", e);
+    }
+    return {};
+  }, []);
+
+  const processQueue = useCallback(async () => {
+    const keys = Object.keys(pendingQueueRef.current);
+    if (keys.length === 0) {
+      setSaveStatus("Saved");
+      saveStatusRef.current = "Saved";
+      return;
+    }
+
+    setSaveStatus("Saving...");
+    saveStatusRef.current = "Saving...";
+
+    const qId = keys[0];
+    const option = pendingQueueRef.current[qId];
+
+    try {
+      const aid = attemptIdRef.current || attemptId || localStorage.getItem("attempt_id");
+      await api.post("/api/v1/exams/save-answer", {
+        attempt_id: parseInt(aid),
+        question_id: parseInt(qId),
+        selected_option: option
+      });
+      // Success, remove from queue only if the value has not changed during flight
+      if (pendingQueueRef.current[qId] === option) {
+        delete pendingQueueRef.current[qId];
+      }
+      setPendingSaves({ ...pendingQueueRef.current });
+      saveQueueToLocalStorage(aid, pendingQueueRef.current);
+      // Trigger next
+      processQueue();
+    } catch (err) {
+      console.error("Save answer failed, will retry:", err);
+      setSaveStatus("Connection lost. Retrying...");
+      saveStatusRef.current = "Connection lost. Retrying...";
+      // Wait 3 seconds and retry
+      setTimeout(processQueue, 3000);
+    }
+  }, [attemptId, saveQueueToLocalStorage]);
+
+  const flushPendingQueue = useCallback(async () => {
+    const startTime = Date.now();
+    const timeout = 5000; // 5 seconds
+    
+    while (Object.keys(pendingQueueRef.current).length > 0 && (Date.now() - startTime) < timeout) {
+      const keys = Object.keys(pendingQueueRef.current);
+      if (keys.length === 0) break;
+      
+      const qId = keys[0];
+      const option = pendingQueueRef.current[qId];
+      const aid = attemptIdRef.current || attemptId || localStorage.getItem("attempt_id");
+      if (!aid) break;
+      
+      try {
+        await api.post("/api/v1/exams/save-answer", {
+          attempt_id: parseInt(aid),
+          question_id: parseInt(qId),
+          selected_option: option
+        });
+        if (pendingQueueRef.current[qId] === option) {
+          delete pendingQueueRef.current[qId];
+        }
+        setPendingSaves({ ...pendingQueueRef.current });
+        saveQueueToLocalStorage(aid, pendingQueueRef.current);
+      } catch (err) {
+        console.error("Flush save failed, retrying in 200ms...", err);
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+    }
+  }, [attemptId, saveQueueToLocalStorage]);
+
   // ── Auto-submit ───────────────────────────────────────────────────────────
 
   const handleAutoSubmit = useCallback(async (reason = "") => {
@@ -53,6 +157,14 @@ const Exam = () => {
     setSubmitting(true);
     // Exit fullscreen gracefully before leaving page
     try { document.exitFullscreen?.(); } catch (_) {}
+
+    // Flush any pending queue elements first
+    try {
+      await flushPendingQueue();
+    } catch (e) {
+      console.error("Error flushing queue during auto-submit:", e);
+    }
+
     try {
       const aid = attemptIdRef.current || localStorage.getItem("attempt_id");
       const isViolation = reason.toLowerCase().includes("violation");
@@ -64,6 +176,7 @@ const Exam = () => {
       localStorage.setItem("submit_result", JSON.stringify(response.data));
       localStorage.removeItem("attempt_id");
       localStorage.setItem("exam_status", "submitted");
+      localStorage.removeItem("pending_answer_queue");
       navigate("/result");
     } catch (err) {
       console.error("Auto submit failed:", err);
@@ -75,7 +188,7 @@ const Exam = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [navigate]);
+  }, [navigate, flushPendingQueue]);
 
   // ── Violation handler ─────────────────────────────────────────────────────
 
@@ -245,7 +358,17 @@ const Exam = () => {
         setExamName(exam_name);
         setTimeLeft(remaining_seconds);
         setQuestions(questions);
-        setAnswers(answers || {});
+
+        // 1. Load queue from localStorage for this attempt
+        const localQueue = loadQueueFromLocalStorage(attempt_id);
+
+        // 2. Restore into memory
+        pendingQueueRef.current = { ...localQueue };
+        setPendingSaves({ ...pendingQueueRef.current });
+
+        // 3. Update Answers state with whatever was local (to render it on screen)
+        setAnswers((prev) => ({ ...prev, ...answers, ...localQueue }));
+
         setCurrentIdx(current_question_index || 0);
         setViolations(violation_count || 0);
         violationsRef.current = violation_count || 0;
@@ -253,6 +376,11 @@ const Exam = () => {
 
         // Enter fullscreen now that we have a user-gesture context (exam loaded)
         enterFullscreen();
+
+        // 4. Automatically begin synchronization if there are items in the localQueue
+        if (Object.keys(localQueue).length > 0) {
+          processQueue();
+        }
       } catch (err) {
         let errMsg = "Error loading examination. Please contact admin.";
         const detail = err.response?.data?.detail;
@@ -274,7 +402,7 @@ const Exam = () => {
       if (timerRef.current) clearInterval(timerRef.current);
       if (autoSaveRef.current) clearInterval(autoSaveRef.current);
     };
-  }, [navigate]);
+  }, [navigate, loadQueueFromLocalStorage, processQueue]);
 
   // ── Sync current question index to backend ─────────────────────────────────
   useEffect(() => {
@@ -304,41 +432,6 @@ const Exam = () => {
 
   // ── Manual submit ─────────────────────────────────────────────────────────
 
-  const processQueue = useCallback(async () => {
-    const keys = Object.keys(pendingQueueRef.current);
-    if (keys.length === 0) {
-      setSaveStatus("Saved");
-      saveStatusRef.current = "Saved";
-      return;
-    }
-
-    setSaveStatus("Saving...");
-    saveStatusRef.current = "Saving...";
-
-    const qId = keys[0];
-    const option = pendingQueueRef.current[qId];
-
-    try {
-      const aid = attemptIdRef.current || attemptId || localStorage.getItem("attempt_id");
-      await api.post("/api/v1/exams/save-answer", {
-        attempt_id: parseInt(aid),
-        question_id: parseInt(qId),
-        selected_option: option
-      });
-      // Success, remove from queue
-      delete pendingQueueRef.current[qId];
-      setPendingSaves({ ...pendingQueueRef.current });
-      // Trigger next
-      processQueue();
-    } catch (err) {
-      console.error("Save answer failed, will retry:", err);
-      setSaveStatus("Connection lost. Retrying...");
-      saveStatusRef.current = "Connection lost. Retrying...";
-      // Wait 3 seconds and retry
-      setTimeout(processQueue, 3000);
-    }
-  }, [attemptId]);
-
   const handleSelectOption = useCallback((questionId, option) => {
     // 1. Update UI state immediately
     setAnswers((prev) => ({ ...prev, [questionId]: option }));
@@ -346,24 +439,38 @@ const Exam = () => {
     // 2. Queue the save
     pendingQueueRef.current[questionId] = option;
     setPendingSaves({ ...pendingQueueRef.current });
+    saveQueueToLocalStorage(attemptId, pendingQueueRef.current);
 
     // 3. Start processing if not already saving
     if (saveStatusRef.current !== "Saving..." && saveStatusRef.current !== "Connection lost. Retrying...") {
       processQueue();
     }
-  }, [processQueue]);
+  }, [processQueue, attemptId, saveQueueToLocalStorage]);
 
   // ── Manual submit ─────────────────────────────────────────────────────────
 
   const handleSubmitExam = async () => {
-    if (Object.keys(pendingQueueRef.current).length > 0) {
-      alert("Please wait, saving your answers...");
-      return;
-    }
     setSubmitting(true);
     submittingRef.current = true;
     setShowConfirm(false);
     try { document.exitFullscreen?.(); } catch (_) {}
+    
+    // Flush pending queue first
+    try {
+      await flushPendingQueue();
+    } catch (e) {
+      console.error("Error flushing queue during manual submit:", e);
+    }
+
+    if (Object.keys(pendingQueueRef.current).length > 0) {
+      const proceed = window.confirm("Some answers could not be saved due to connection issues. Do you still want to submit?");
+      if (!proceed) {
+        setSubmitting(false);
+        submittingRef.current = false;
+        return;
+      }
+    }
+
     try {
       const response = await api.post("/api/v1/exams/submit", { 
         attempt_id: attemptId,
@@ -372,10 +479,12 @@ const Exam = () => {
       localStorage.setItem("submit_result", JSON.stringify(response.data));
       localStorage.removeItem("attempt_id");
       localStorage.setItem("exam_status", "submitted");
+      localStorage.removeItem("pending_answer_queue");
       navigate("/result");
     } catch (err) {
       setError("Manual submission failed. Please try again.");
       console.error(err);
+      submittingRef.current = false;
     } finally {
       setSubmitting(false);
     }

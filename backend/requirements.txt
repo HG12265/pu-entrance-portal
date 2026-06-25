@@ -14,3 +14,4 @@ email-validator>=2.1.1
 slowapi>=0.1.9
 Pillow>=10.2.0
 tzdata
+gunicorn>=21.2.0
